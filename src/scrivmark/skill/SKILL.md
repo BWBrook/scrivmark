@@ -49,9 +49,15 @@ author: accept, reject, reply, resolve, edit.
   round's statement already records that an agent helped.
 - **"Look at my selection."** Run `scrivmark selection --json`. It gives the
   file, lines and exact source text the human has selected. If `stale` is
-  true, say so and ask them to reselect. `scrivmark asks --json` lists
-  questions queued with the viewer's Ask button; answer each, then mark it
-  with `scrivmark asks --done <id>`.
+  true, say so and ask them to reselect.
+- **"Check my asks."** The human queues questions on passages with the
+  viewer's Ask button; each shows as a blue card in their margin.
+  `scrivmark asks --json` lists the open ones with their passages. Answer each
+  with `scrivmark answer <id> --body "..."`: the answer appears on its card,
+  and the human can turn it into a comment for the author with one click, so
+  write answers that could stand as such a comment. Mention anything longer
+  in the chat too. If an answer implies a wording change, also leave a
+  `--draft` with `--wording`. Leave dismissing to the human.
 - **Dictated comments and edits.** When the reviewer tells you what to say,
   use `scrivmark comment` without `--draft`; it is signed as theirs. When they
   ask for a change, edit the Markdown file directly. That edit *is* the

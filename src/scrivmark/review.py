@@ -519,6 +519,44 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
     return t
 
 
+# ---------------------------------------------------------------- asks
+# Questions the human queues for their agent from the viewer. Like drafts they
+# are local to this machine and never reach the record or the other side.
+
+
+def _asks_path(rv: Review) -> Path:
+    return local_dir(rv.root, rv.id) / "asks.json"
+
+
+def asks(rv: Review, include_done: bool = False) -> list[dict]:
+    items = read_json(_asks_path(rv), [])
+    return [dict(a, where=resolve(rv, a["anchor"])) for a in items if include_done or not a.get("done")]
+
+
+def add_ask(rv: Review, anchor: dict, question: str) -> dict:
+    with transaction(rv.root) as writes:
+        items = read_json(_asks_path(rv), [])
+        item = {"id": record.new_id("q"), "anchor": anchor, "question": question, "answer": None,
+                "at": record.now(), "done": False}
+        items.append(item)
+        writes[str(_asks_path(rv).relative_to(rv.root))] = json.dumps(items, indent=2, ensure_ascii=False)
+    return item
+
+
+def update_ask(rv: Review, qid: str, answer: str | None = None, done: bool | None = None) -> dict:
+    with transaction(rv.root) as writes:
+        items = read_json(_asks_path(rv), [])
+        item = next((a for a in items if a["id"] == qid), None)
+        if item is None:
+            raise ScrivError(f"No ask {qid}")
+        if answer is not None:
+            item.update({"answer": answer, "answered_at": record.now()})
+        if done is not None:
+            item["done"] = done
+        writes[str(_asks_path(rv).relative_to(rv.root))] = json.dumps(items, indent=2, ensure_ascii=False)
+    return item
+
+
 # ---------------------------------------------------------------- direct edits
 
 

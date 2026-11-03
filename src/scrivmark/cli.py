@@ -121,21 +121,37 @@ def _ver(v: str) -> tuple[int, ...]:
 
 
 @app.command()
-def skill(install: Annotated[bool, typer.Option(help="Copy the guide into ~/.claude/skills and ~/.codex/skills.")] = False):
-    """Show or install the agent guide that teaches Claude and Codex to use scrivmark."""
-    from importlib.resources import files
+def skill(install: Annotated[bool, typer.Option(help="Link the guide into ~/.claude/skills and ~/.codex/skills.")] = False):
+    """Show or install the agent guide that teaches Claude and Codex to use scrivmark.
 
-    src = files("scrivmark") / "skill" / "SKILL.md"
+    Installing links to the guide inside this scrivmark installation, so it
+    stays current when scrivmark is upgraded. On a Windows drive (a WSL path
+    under /mnt/), Windows apps cannot follow the link, so the guide is copied.
+    """
+    from importlib.resources import as_file, files
+
     if not install:
-        typer.echo(src.read_text())
+        typer.echo((files("scrivmark") / "skill" / "SKILL.md").read_text())
         return
-    done = []
-    for home in (Path.home() / ".claude", Path.home() / ".codex"):
-        if home.exists():
-            dest = home / "skills" / "scrivmark" / "SKILL.md"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(src.read_text())
-            done.append(str(dest))
+    with as_file(files("scrivmark") / "skill") as src:
+        src = Path(src).resolve()
+        done = []
+        for home in (Path.home() / ".claude", Path.home() / ".codex"):
+            if not home.exists():
+                continue
+            skills = home.resolve() / "skills"
+            dest = skills / "scrivmark"
+            skills.mkdir(parents=True, exist_ok=True)
+            if dest.is_symlink() or dest.is_file():
+                dest.unlink()
+            elif dest.is_dir():
+                shutil.rmtree(dest)
+            if str(skills).startswith("/mnt/") and len(str(skills)) > 6 and str(skills)[6] == "/":
+                shutil.copytree(src, dest)
+                done.append(f"{dest} (copied: Windows apps cannot follow a WSL link; rerun after upgrading)")
+            else:
+                dest.symlink_to(src, target_is_directory=True)
+                done.append(f"{dest} -> {src}")
     typer.echo("Installed:\n  " + "\n  ".join(done) if done else "Found neither ~/.claude nor ~/.codex.")
 
 
@@ -441,17 +457,30 @@ def selection(as_json: Json = False):
 
 
 @app.command()
-def asks(done: Annotated[Optional[str], typer.Option(help="Mark an ask answered.")] = None, as_json: Json = False):
-    """Questions the human queued from the viewer's Ask button."""
+def asks(done: Annotated[Optional[str], typer.Option(help="Dismiss an ask (the human usually does this).")] = None,
+         all_: Annotated[bool, typer.Option("--all", help="Include dismissed asks.")] = False,
+         as_json: Json = False):
+    """Questions the human queued for you from the viewer's Ask button."""
     rv = review.active(_root())
-    p = local_dir(rv.root, rv.id) / "asks.json"
-    items = read_json(p, [])
     if done:
-        items = [dict(a, done=True) if a["id"] == done else a for a in items]
-        p.write_text(json.dumps(items, indent=2, ensure_ascii=False))
-    pending = [a for a in items if not a.get("done")]
-    _emit(pending, as_json, "\n".join(f"{a['id']}  {a['file']}: {_short(a['exact'], 50)!r}\n    {a['question']}" for a in pending)
-          or "No open asks.")
+        review.update_ask(rv, done, done=True)
+    items = review.asks(rv, include_done=all_)
+    lines = []
+    for a in items:
+        where = "" if a["where"]["state"] == "ok" else " (passage changed)"
+        lines.append(f"{a['id']}  {a['anchor']['file']}{where}: {_short(a['anchor']['exact'], 50)!r}\n    Q: {a['question']}")
+        if a["answer"]:
+            lines.append(f"    A: {_short(a['answer'], 200)}")
+    _emit(items, as_json, "\n".join(lines) or "No open asks.")
+
+
+@app.command()
+def answer(ask_id: str, body: Annotated[str, typer.Option(help="Your answer, shown on the ask's card.")],
+           as_json: Json = False):
+    """Answer an ask; the answer appears on its card in the viewer (agents)."""
+    rv = review.active(_root())
+    a = review.update_ask(rv, ask_id, answer=body)
+    _emit(a, as_json, f"Answered {a['id']}.")
 
 
 @app.command()

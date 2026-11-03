@@ -13,6 +13,8 @@
   --hl-active: #ffd95a;
   --card: #ffffff;
   --draft: #fff8e1;
+  --ask: #eaf1fb;
+  --ask-edge: #5b8bd4;
   --shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 2px 8px rgba(0, 0, 0, .05);
   color-scheme: light;
 }
@@ -32,6 +34,8 @@
     --hl-active: #6b5a12;
     --card: #23262a;
     --draft: #3a3420;
+    --ask: #1d2738;
+    --ask-edge: #7ea6e6;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4);
     color-scheme: dark;
   }
@@ -201,3 +205,7 @@ kbd { border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; font-si
   .card { position: static; margin: 8px 0; }
   .scrv-b > .edit { left: auto; right: -6px; }
 }
+
+.card.ask { background: var(--ask); border-left-color: var(--ask-edge); }
+.card.ask .answer { border-top: 1px solid var(--rule); padding-top: 4px; }
+mark.scrv-hl.ask { background: transparent; border-bottom: 2px solid var(--ask-edge); }

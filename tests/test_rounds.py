@@ -145,3 +145,17 @@ def test_close_can_be_resumed(repo, monkeypatch):
         rounds.close_round(repo, push=False)
     monkeypatch.setattr(rounds, "_merge_closed", real)
     assert rounds.close_round(repo, push=False)["merged_into"] == "main"
+
+
+def test_asks_are_local_cards_that_agents_answer(repo):
+    from scrivmark.server import Viewer
+
+    rv = rounds.start(repo)
+    a = review.add_ask(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaimed?")
+    review.update_ask(rv, a["id"], answer="Yes: aspect is only a proxy for temperature.")
+    st = Viewer(repo).state()
+    assert [x["answer"] for x in st["asks"]] == ["Yes: aspect is only a proxy for temperature."]
+    assert st["asks"][0]["line"]
+    review.update_ask(rv, a["id"], done=True)
+    assert review.asks(rv) == []
+    assert "Overclaimed" not in (repo / "reviews" / f"{rv.id}.json").read_text()

@@ -45,7 +45,11 @@ Now, in the viewer:
    Drafts appear in yellow in the margin. **Keep** the good ones (any wording
    is applied as a real edit) and **Drop** the rest.
 4. **Ask about a passage.** Select *thermal benefits drive the choice of
-   burrow* and tell the agent: "look at my selection; is this overclaimed?"
+   burrow*, press **Ask agent**, and type "Is this overclaimed?". The question
+   waits as a blue card in your margin. Queue as many as you like while you
+   read, then tell the agent "check my asks": its answers appear on the cards,
+   and **Comment from this** turns one into a comment for the author. (For a
+   quick question, select text and just say "look at my selection".)
 
 There's also a doubled word in the Discussion. Fix it or leave it for the
 agent.

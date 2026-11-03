@@ -64,7 +64,7 @@ class Viewer:
         rv = self.current()
         branch = gitutil.current_branch(self.root)
         key_paths = [config.CONFIG, *ms.files, *ms.bibliography, *([ms.csl] if ms.csl else []),
-                     *([rv.record_rel, rv.drafts_rel] if rv else [])]
+                     *([rv.record_rel, rv.drafts_rel, str(review._asks_path(rv).relative_to(self.root))] if rv else [])]
         key = f"{branch}:{revision(self.root, key_paths)}"
         if self.cache and self.cache[0] == key:
             return self.cache[1]
@@ -89,12 +89,14 @@ class Viewer:
             "round": rv.rec["round"] if rv else None,
             "rev": rv.rev() if rv else None,
             "me": self.who(rv) if rv else None,
-            "threads": [], "drafts": [], "changes": [],
+            "threads": [], "drafts": [], "asks": [], "changes": [],
         }
         if rv:
             data["threads"] = [self._place(rv, t) for t in review.threads(rv)]
             if rv.status == "open":
                 data["drafts"] = [self._place(rv, d) for d in review.drafts(rv)]
+            if rv.status in ("open", "returned"):
+                data["asks"] = [self._place(rv, a) for a in review.asks(rv)]
             if rv.status in ("returned", "closed"):
                 data["changes"] = review.changes(rv)
         self.cache = (key, data)
@@ -154,7 +156,7 @@ class Viewer:
             if ".git" in p.parts:
                 return p.name in ("HEAD",) or "refs" in p.parts
             if ".scrivmark" in p.parts:
-                return p.name == "drafts.json"
+                return p.name in ("drafts.json", "asks.json")
             return not p.name.startswith(".")
 
         async for _ in awatch(self.root, watch_filter=relevant, debounce=250, recursive=True):
@@ -315,14 +317,22 @@ def build_app(viewer: Viewer) -> Starlette:
         b = await body_of(request)
         rv = viewer.need()
         viewer.check_render(b)
-        a = viewer.anchor_from(rv, b)
-        p = local_dir(viewer.root, rv.id) / "asks.json"
-        items = read_json(p, [])
-        item = {"id": record.new_id("q"), "file": a["file"], "range": a["range"], "exact": a["exact"],
-                "question": b["question"], "file_rev": revision(viewer.root, [a["file"]]), "at": record.now()}
-        items.append(item)
-        atomic_write(p, json.dumps(items, indent=2, ensure_ascii=False))
-        return JSONResponse(item)
+        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"]))
+
+    async def ask_update(request: Request):
+        b = await body_of(request)
+        rv = viewer.need()
+        item = next((a for a in review.asks(rv, include_done=True) if a["id"] == b["ask"]), None)
+        if item is None:
+            raise ScrivError(f"No ask {b['ask']}")
+        if b.get("comment"):
+            if item["where"]["state"] != "ok":
+                raise Conflict("The passage this ask was about has changed; comment on it afresh.")
+            s, e = item["where"]["range"]
+            t = review.comment(rv, review.anchor_at(rv, item["anchor"]["file"], s, e), b["comment"], viewer.who(rv), b.get("rev"))
+            review.update_ask(rv, item["id"], done=True)
+            return JSONResponse(t)
+        return JSONResponse(review.update_ask(rv, item["id"], done=bool(b.get("done"))))
 
     routes = [
         Route("/", index),
@@ -340,6 +350,7 @@ def build_app(viewer: Viewer) -> Starlette:
         Route("/api/undo", guard(undo, True), methods=["POST"]),
         Route("/api/selection", guard(selection, True), methods=["POST"]),
         Route("/api/ask", guard(ask, True), methods=["POST"]),
+        Route("/api/ask/update", guard(ask_update, True), methods=["POST"]),
     ]
 
     @asynccontextmanager

@@ -99,6 +99,8 @@ function drawCounts() {
   const st = S.st, open = st.threads.filter(t => t.status === "open").length;
   let txt = `${open} open comment${open === 1 ? "" : "s"}`;
   if (st.mode === "reviewer" && st.drafts.length) txt += ` · ${st.drafts.length} draft${st.drafts.length === 1 ? "" : "s"}`;
+  const asks = st.asks.length;
+  if (asks) txt += ` · ${asks} ask${asks === 1 ? "" : "s"}`;
   if (st.mode === "author") {
     const p = pending().length;
     txt = `${p} change${p === 1 ? "" : "s"} to decide · ` + txt;
@@ -162,6 +164,7 @@ function decorate() {
     }
   }
   for (const t of [...S.st.threads, ...S.st.drafts]) if (t.line) highlight(t);
+  for (const a of S.st.asks) if (a.line) highlight(a, "ask");
 }
 
 function findBlock(file, line) {
@@ -177,7 +180,7 @@ function plainQuote(s) {
     .replace(/[*_`#]/g, "").replace(/\s+/g, " ").trim();
 }
 
-function highlight(t) {
+function highlight(t, kind = "") {
   const block = findBlock(t.anchor.file, t.line[0]);
   if (!block) return;
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
@@ -210,7 +213,7 @@ function highlight(t) {
     const range = document.createRange();
     range.setStart(node, s);
     range.setEnd(node, e + 1);
-    const m = el("mark", { class: `scrv-hl${t.status === "resolved" ? " resolved" : ""}`, "data-t": t.id });
+    const m = el("mark", { class: `scrv-hl${t.status === "resolved" ? " resolved" : ""}${kind ? " " + kind : ""}`, "data-t": t.id });
     try { range.surroundContents(m); } catch { continue; }
     m.addEventListener("click", ev => { ev.stopPropagation(); setActive(t.id); });
     first = first || m;
@@ -226,14 +229,17 @@ function buildMargin() {
   margin.replaceChildren();
   const items = [
     ...st.drafts.map(d => ({ ...d, kind: "draft" })),
+    ...st.asks.map(a => ({ ...a, kind: "ask" })),
     ...st.threads.map(t => ({ ...t, kind: "thread" })),
   ];
+  const card = { draft: draftCard, ask: askCard, thread: threadCard };
+  const reopen = { draft: editDraft, ask: askComment, thread: replyBox };
   for (const it of items) {
-    const c = it.kind === "draft" ? draftCard(it) : threadCard(it);
+    const c = card[it.kind](it);
     c.dataset.t = it.id;
     c.addEventListener("click", () => setActive(it.id, false));
     margin.append(c);
-    if (S.compose[`${it.kind}:${it.id}`]) (it.kind === "draft" ? editDraft : replyBox)(c, it, true);
+    if (S.compose[`${it.kind}:${it.id}`]) reopen[it.kind](c, it, true);
   }
   if (focusKey) {
     const ta = $(`textarea[data-key="${focusKey}"]`, margin);
@@ -246,7 +252,7 @@ function layoutMargin() {
   const cards = $$(".card", margin);
   if (!cards.length || getComputedStyle(cards[0]).position !== "absolute") return;
   const top0 = margin.getBoundingClientRect().top;
-  const all = [...S.st.threads, ...S.st.drafts];
+  const all = [...S.st.threads, ...S.st.drafts, ...S.st.asks];
   const placed = cards.map(c => {
     const it = all.find(x => x.id === c.dataset.t);
     return { c, want: it && it._mark ? it._mark.getBoundingClientRect().top - top0 : -1 };
@@ -292,6 +298,43 @@ function draftCard(d) {
     el("button", { onclick: e => { e.stopPropagation(); editDraft(c, d); } }, "Edit"),
     el("button", { onclick: e => { e.stopPropagation(); triage(d.id, "drop"); } }, "Drop")));
   return c;
+}
+
+function askCard(a) {
+  const c = el("div", { class: "card ask", tabindex: "-1" },
+    el("div", { class: "tag" }, a.answer ? "Your agent answered" : "Question for your agent"),
+    quoteLine(a),
+    el("div", { class: "msg" }, el("span", { class: "by" }, "You"), a.question),
+    a.answer ? el("div", { class: "msg answer" }, el("span", { class: "by" }, "Agent"), a.answer)
+      : el("div", { class: "muted small" }, "Not answered yet. In the chat, ask your agent to “check my asks”."));
+  c.append(el("div", { class: "acts" },
+    a.answer ? el("button", { class: "primary", onclick: e => { e.stopPropagation(); askComment(c, a); } }, "Comment from this") : null,
+    el("button", { onclick: e => { e.stopPropagation(); dismissAsk(a.id); } }, "Dismiss")));
+  return c;
+}
+
+function askComment(card, a, restoring = false) {
+  if ($("textarea", card)) return;
+  const key = `ask:${a.id}`;
+  S.compose[key] = S.compose[key] || { text: a.answer || "" };
+  const ta = composer(key, "text", "Comment for the author…");
+  const send = async () => {
+    if (!ta.value.trim()) return;
+    try {
+      await api("/api/ask/update", { ask: a.id, comment: ta.value, rev: S.st.rev });
+      delete S.compose[key]; S.focus = null;
+    } catch (e) { fail(e); }
+  };
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") closeComposer(key); });
+  card.append(el("div", { class: "tag" }, "Comment for the author (edit before sending)"), ta,
+    el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, "Add comment"),
+      el("button", { onclick: () => closeComposer(key) }, "Cancel")));
+  if (!restoring) ta.focus();
+  layoutMargin();
+}
+
+async function dismissAsk(id) {
+  try { await api("/api/ask/update", { ask: id, done: true }); } catch (e) { fail(e); }
 }
 
 function composer(key, field, placeholder) {
@@ -355,7 +398,7 @@ function setActive(id, scroll = true) {
   S.active = id;
   $$(".card", margin).forEach(c => c.classList.toggle("active", c.dataset.t === id));
   $$("mark.scrv-hl", doc).forEach(m => m.classList.toggle("active", m.dataset.t === id));
-  const it = [...S.st.threads, ...S.st.drafts].find(x => x.id === id);
+  const it = [...S.st.threads, ...S.st.drafts, ...S.st.asks].find(x => x.id === id);
   if (scroll && it && it._mark) it._mark.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
@@ -478,7 +521,7 @@ tool.addEventListener("click", e => {
     try {
       const where = { file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key };
       if (act === "comment") await api("/api/comment", { ...where, body: ta.value, rev: S.st.rev });
-      else { await api("/api/ask", { ...where, question: ta.value }); notice("Queued. Tell your agent: “check my asks”.", 6000); }
+      else { await api("/api/ask", { ...where, question: ta.value }); notice("Your question is in the margin. When you're ready, tell your agent: “check my asks”.", 7000); }
       closePop();
     } catch (err) { fail(err); }
   };
@@ -525,7 +568,7 @@ async function startEdit(block) {
 
 function queue() {
   const st = S.st, open = st.threads.filter(t => t.status === "open");
-  const outside = [...$$(".row[data-q]", $("#files")), ...$$(".card.orphan.open, .card.draft", margin)];
+  const outside = [...$$(".row[data-q]", $("#files")), ...$$(".card.orphan.open, .card.draft, .card.ask", margin)];
   const marks = open.map(t => $(`mark.scrv-hl[data-t="${t.id}"]`, doc) || t._mark).filter(Boolean);
   const changes = st.mode === "author"
     ? $$("[data-c][tabindex]", doc)
