@@ -64,9 +64,9 @@ def test_f02_draft_never_moves_to_a_lookalike_claim(repo):
 
 
 def test_f03_metadata_cannot_script_the_viewer(repo):
+    edit(repo, 'author: "Sam Student"', "author: '[Sam]{onclick=\"alert(1)\"}'")
     edit(repo, 'title: "Do wombats prefer sunny burrows?"',
          "title: '![x](missing.png){onerror=\"document.documentElement.dataset.audit=1\"}'\n"
-         "author: '[Sam]{onclick=\"alert(1)\"}'\n"
          "references:\n- id: evil\n  type: article-journal\n  title: '[t]{onmouseover=\"alert(2)\"} [l](javascript:alert(3))'\n"
          "  issued: 2020\nnocite: '@evil'")
     html, _ = render.render(repo, config.load(repo))

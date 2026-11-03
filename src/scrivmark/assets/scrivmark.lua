@@ -87,6 +87,7 @@ local function eq_label(para)
 end
 
 local function tbl_label(tbl)
+  if tbl.identifier and tbl.identifier:match("^tbl%-") then return tbl.identifier end
   local long = tbl.caption.long
   local last = long[#long]
   if not last or not last.content then return nil end

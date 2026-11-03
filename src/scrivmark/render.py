@@ -9,6 +9,7 @@ that fails, the old block is shown struck through above the new one.
 
 import json
 import re
+from functools import lru_cache
 import secrets
 import subprocess
 from importlib.resources import files
@@ -238,9 +239,16 @@ def render(root: Path, ms: Manuscript, base: str | None = None,
     return sanitize.clean(html), warnings
 
 
+@lru_cache(maxsize=1)
+def _math_flag() -> str:
+    """--mathml became --math-method=mathml in later pandoc releases."""
+    help_text = subprocess.run(["pandoc", "--help"], capture_output=True, text=True).stdout
+    return "--math-method=mathml" if "--math-method" in help_text else "--mathml"
+
+
 def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str, str]:
     cmd = [
-        "pandoc", "-f", PANDOC_FROM, "-t", "html5", "--mathml", "--wrap=none", "--standalone",
+        "pandoc", "-f", PANDOC_FROM, "-t", "html5", _math_flag(), "--wrap=none", "--standalone",
         "--template", str(ASSETS / "template.html"), "--lua-filter", str(ASSETS / "scrivmark.lua"),
         "--citeproc", "--metadata", "link-citations=true", "--metadata", "pagetitle=scrivmark",
         "--metadata", "reference-section-title=References", "--metadata", f"scrv-nonce={nonce}",
