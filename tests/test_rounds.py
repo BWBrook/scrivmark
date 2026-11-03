@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scrivmark import review, rounds
+from scrivmark import record, review, rounds
 from scrivmark.errors import Conflict, ScrivError
 
 from conftest import edit, git
@@ -151,7 +151,7 @@ def test_asks_are_local_cards_that_agents_answer(repo):
     from scrivmark.server import Viewer
 
     rv = rounds.start(repo)
-    a = review.add_ask(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaimed?")
+    a = review.add_ask(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaimed?", "BWB")
     review.update_ask(rv, a["id"], answer="Yes: aspect is only a proxy for temperature.")
     st = Viewer(repo).state()
     assert [x["answer"] for x in st["asks"]] == ["Yes: aspect is only a proxy for temperature."]
@@ -159,3 +159,26 @@ def test_asks_are_local_cards_that_agents_answer(repo):
     review.update_ask(rv, a["id"], done=True)
     assert review.asks(rv) == []
     assert "Overclaimed" not in (repo / "reviews" / f"{rv.id}.json").read_text()
+
+
+def test_answer_wording_applies_and_answered_asks_are_archived(repo, monkeypatch):
+    rv = rounds.start(repo)
+    a = review.add_ask(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaimed?", "BWB")
+    b = review.add_ask(rv, review.anchor_quote(rv, "paper.md", "proves that"), "Too strong?", "BWB")
+    review.add_ask(rv, review.anchor_quote(rv, "paper.md", "Methods"), "Never answered", "BWB")
+    review.update_ask(rv, a["id"], answer="Aspect is only a proxy.", wording="aspect", by="Claude Opus 5.5")
+    review.update_ask(rv, b["id"], answer="Yes.", wording="suggests that", by="Claude Opus 5.5")
+    edit(repo, "proves that", "shows that")
+    with pytest.raises(Conflict):
+        review.apply_ask(rv, b["id"])
+    applied = review.apply_ask(rv, a["id"])
+    assert "aspect drive" in (repo / "paper.md").read_text()
+    assert applied["anchor"]["exact"] == "aspect" and not applied["done"]
+    assert review.asks(rv)[0]["where"]["state"] == "ok"
+    with pytest.raises(ScrivError):
+        review.apply_ask(rv, a["id"])
+    review.update_ask(rv, b["id"], done=True)
+    rid = rounds.return_round(repo, push=False)["round"]
+    kept = record.load(repo, rid)["asks"]
+    assert [(k["question"], k["answered_by"], bool(k.get("applied")), k["done"]) for k in kept] == [
+        ("Overclaimed?", "Claude Opus 5.5", True, False), ("Too strong?", "Claude Opus 5.5", False, True)]

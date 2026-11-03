@@ -95,6 +95,24 @@ SCHEMA = {
                 },
             },
         },
+        "asks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "anchor", "question", "answer", "at"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "anchor": {"type": "object", "required": ["file", "exact"]},
+                    "question": {"type": "string"},
+                    "by": {"type": ["string", "null"]},
+                    "answer": {"type": "string"},
+                    "answered_by": {"type": ["string", "null"]},
+                    "wording": {"type": ["string", "null"]},
+                    "applied": {"type": ["string", "null"]},
+                    "done": {"type": "boolean"},
+                },
+            },
+        },
     },
 }
 

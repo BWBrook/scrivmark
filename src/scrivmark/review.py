@@ -40,7 +40,7 @@ class Review:
         return f"{record.REVIEWS}/{self.id}.json"
 
     def watched(self) -> list[str]:
-        files = set(self.ms.files) | {c["file"] for c in self.rec["changes"]} | {self.record_rel}
+        files = set(self.ms.sources) | {c["file"] for c in self.rec["changes"]} | {self.record_rel}
         return sorted(files)
 
     def rev(self) -> str:
@@ -477,6 +477,23 @@ def add_draft(rv: Review, anchor: dict, body: str, wording: str | None, expect: 
     return d
 
 
+def _apply_wording(rv: Review, anchor: dict, wording: str, writes: dict, refusal: str) -> dict:
+    """Replace the anchored text with `wording` as a real edit, only while that
+    text is exactly as quoted; returns the anchor of the new text."""
+    where = resolve(rv, anchor)
+    cur = rv.text(anchor["file"])
+    if where["state"] != "ok" or where["how"] == "edited" or cur[where["range"][0] : where["range"][1]] != anchor["exact"]:
+        raise Conflict(refusal)
+    s, e = where["range"]
+    new = cur[:s] + wording + cur[e:]
+    writes[anchor["file"]] = new
+    return {
+        "file": anchor["file"], "rev": _snapshot(rv, new), "range": [s, s + len(wording)],
+        "exact": wording, "prefix": new[max(0, s - CONTEXT) : s],
+        "suffix": new[s + len(wording) : s + len(wording) + CONTEXT],
+    }
+
+
 def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
            wording: str | None = None, expect: str | None = None) -> dict | None:
     """Keep a draft as the reviewer's own (applying any wording as a real edit),
@@ -495,19 +512,8 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
         wording = d["wording"] if wording is None else wording
         anchor = d["anchor"]
         if wording is not None:
-            where = resolve(rv, anchor)
-            cur = rv.text(anchor["file"])
-            if where["state"] != "ok" or where["how"] == "edited" or cur[where["range"][0] : where["range"][1]] != anchor["exact"]:
-                raise Conflict("The draft's passage has been edited since it was written, so its wording "
-                               "was not applied. Edit the draft, or drop it.")
-            s, e = where["range"]
-            new = cur[:s] + wording + cur[e:]
-            writes[anchor["file"]] = new
-            anchor = {
-                "file": anchor["file"], "rev": _snapshot(rv, new), "range": [s, s + len(wording)],
-                "exact": wording, "prefix": new[max(0, s - CONTEXT) : s],
-                "suffix": new[s + len(wording) : s + len(wording) + CONTEXT],
-            }
+            anchor = _apply_wording(rv, anchor, wording, writes, "The draft's passage has been edited since it "
+                                    "was written, so its wording was not applied. Edit the draft, or drop it.")
         t = None
         if body and body.strip():
             t = {
@@ -533,28 +539,58 @@ def asks(rv: Review, include_done: bool = False) -> list[dict]:
     return [dict(a, where=resolve(rv, a["anchor"])) for a in items if include_done or not a.get("done")]
 
 
-def add_ask(rv: Review, anchor: dict, question: str) -> dict:
+def add_ask(rv: Review, anchor: dict, question: str, who: str) -> dict:
     with transaction(rv.root) as writes:
         items = read_json(_asks_path(rv), [])
-        item = {"id": record.new_id("q"), "anchor": anchor, "question": question, "answer": None,
+        item = {"id": record.new_id("q"), "anchor": anchor, "question": question, "by": who, "answer": None,
                 "at": record.now(), "done": False}
         items.append(item)
         writes[str(_asks_path(rv).relative_to(rv.root))] = json.dumps(items, indent=2, ensure_ascii=False)
     return item
 
 
-def update_ask(rv: Review, qid: str, answer: str | None = None, done: bool | None = None) -> dict:
+def update_ask(rv: Review, qid: str, answer: str | None = None, done: bool | None = None,
+               wording: str | None = None, by: str | None = None) -> dict:
     with transaction(rv.root) as writes:
         items = read_json(_asks_path(rv), [])
         item = next((a for a in items if a["id"] == qid), None)
         if item is None:
             raise ScrivError(f"No ask {qid}")
         if answer is not None:
-            item.update({"answer": answer, "answered_at": record.now()})
+            item.update({"answer": answer, "answered_at": record.now(), "answered_by": by, "wording": wording})
         if done is not None:
             item["done"] = done
         writes[str(_asks_path(rv).relative_to(rv.root))] = json.dumps(items, indent=2, ensure_ascii=False)
     return item
+
+
+def apply_ask(rv: Review, qid: str, expect: str | None = None) -> dict:
+    """Make an answer's proposed wording a real edit. The ask stays open, now
+    anchored to the new text, so it can still become a comment."""
+    if rv.status == "closed":
+        raise ScrivError("This round is closed.")
+    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+        items = read_json(_asks_path(rv), [])
+        item = next((a for a in items if a["id"] == qid), None)
+        if item is None:
+            raise ScrivError(f"No ask {qid}")
+        if item.get("wording") is None or item.get("applied"):
+            raise ScrivError(f"Ask {qid} has no wording to apply.")
+        anchor = _apply_wording(rv, item["anchor"], item["wording"], writes, "The passage has been edited since "
+                                "the answer was written, so its wording was not applied. Edit the text yourself.")
+        item.update({"applied": record.now(), "anchor": anchor, "asked_on": item["anchor"]["exact"]})
+        writes[str(_asks_path(rv).relative_to(rv.root))] = json.dumps(items, indent=2, ensure_ascii=False)
+    return item
+
+
+def archive_asks(rv: Review) -> int:
+    """Answered asks join the round record, apart from the comment threads, so
+    the human-AI exchange behind a review is kept with it. Returns how many."""
+    kept = {a["id"]: a for a in rv.rec.get("asks", [])}
+    kept.update({a["id"]: a for a in read_json(_asks_path(rv), []) if a.get("answer")})
+    if kept:
+        rv.rec["asks"] = sorted(kept.values(), key=lambda a: a["at"])
+    return len(kept)
 
 
 # ---------------------------------------------------------------- direct edits
@@ -565,7 +601,7 @@ def replace_lines(rv: Review, rel: str, first: int, last: int, new_text: str, fi
     if the file is still at `file_rev`."""
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
-    if rel not in rv.ms.files:
+    if rel not in rv.ms.sources:
         raise ScrivError(f"{rel} is not a manuscript file")
     with transaction(rv.root, file_rev, [rel]) as writes:
         lines = rv.text(rel).splitlines(keepends=True)

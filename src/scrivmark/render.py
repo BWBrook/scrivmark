@@ -9,6 +9,7 @@ that fails, the old block is shown struck through above the new one.
 
 import json
 import re
+from html import escape, unescape
 from functools import lru_cache
 import secrets
 import subprocess
@@ -236,7 +237,84 @@ def render(root: Path, ms: Manuscript, base: str | None = None,
            pending: dict[str, Pending] | None = None) -> tuple[str, str]:
     nonce = secrets.token_hex(8)
     html, warnings = to_html(root, ms, manuscript_markdown(root, ms, nonce, base, pending), nonce)
-    return sanitize.clean(html), warnings
+    return sanitize.clean(_tag_references(html, bib_entries(root, ms))), warnings
+
+
+BIB_KEY = re.compile(r"\s*@(\w+)\s*[{(]\s*([^,\s]+)\s*,")
+YAML_ID = re.compile(r"\s*(?:- )?id:\s*['\"]?([^'\"\s]+)")
+JSON_ID = re.compile(r'"id"\s*:\s*"([^"]+)"')
+REF_DIV = re.compile(r'<div id="ref-([^"]+)" class="csl-entry"')
+
+
+def _bib_spans(rel: str, lines: list[str]) -> list[tuple[int, int, str | None]]:
+    """(first, last, key) for each entry of a BibTeX, CSL YAML or CSL JSON file, 0-based."""
+    if rel.endswith(".bib"):
+        starts = [(i, m.group(2)) for i, line in enumerate(lines)
+                  if (m := BIB_KEY.match(line)) and m.group(1).lower() not in ("comment", "string", "preamble")]
+        ends = [s for s, _ in starts[1:]] + [len(lines)]
+        return [(i, end - 1, key) for (i, key), end in zip(starts, ends)]
+    if rel.endswith((".yaml", ".yml")):
+        items = [i for i, line in enumerate(lines) if re.match(r"\s*- ", line)]
+        if not items:
+            return []
+        indent = min(len(lines[i]) - len(lines[i].lstrip()) for i in items)
+        tops = [i for i in items if len(lines[i]) - len(lines[i].lstrip()) == indent]
+        out = []
+        for i, end in zip(tops, tops[1:] + [len(lines)]):
+            body = lines[i:end]
+            stop = next((k for k, line in enumerate(body[1:], 1)
+                         if line.strip() and len(line) - len(line.lstrip()) <= indent), len(body))
+            key = next((m.group(1) for line in body[:stop] if (m := YAML_ID.match(line))), None)
+            out.append((i, i + stop - 1, key))
+        return out
+    if rel.endswith(".json"):
+        out, depth, start, in_str, esc = [], 0, 0, False, False
+        for i, line in enumerate(lines):
+            for ch in line:
+                if in_str:
+                    in_str, esc = (not (ch == '"' and not esc)), (ch == "\\" and not esc)
+                elif ch == '"':
+                    in_str = True
+                elif ch in "[{":
+                    depth += 1
+                    if depth == 2:
+                        start = i
+                elif ch in "]}":
+                    if depth == 2:
+                        key = next((m.group(1) for line in lines[start:i + 1] if (m := JSON_ID.search(line))), None)
+                        out.append((start, i, key))
+                    depth -= 1
+        return out
+    return []
+
+
+def bib_entries(root: Path, ms: Manuscript) -> dict[str, tuple[str, int, int]]:
+    """Each citation key's entry in the bibliography files, as (file, first line, last line)."""
+    out: dict[str, tuple[str, int, int]] = {}
+    for rel in ms.bibliography:
+        p = root / rel
+        if not p.is_file():
+            continue
+        lines = p.read_text().splitlines()
+        for first, last, key in _bib_spans(rel, lines):
+            while last > first and not lines[last].strip():
+                last -= 1
+            if key:
+                out.setdefault(key, (rel, first + 1, last + 1))
+    return out
+
+
+def _tag_references(html: str, entries: dict[str, tuple[str, int, int]]) -> str:
+    """Point each generated reference-list entry at its source, so it can be
+    commented on and edited like a manuscript block."""
+    def tag(m: re.Match) -> str:
+        hit = entries.get(unescape(m.group(1)))
+        if not hit:
+            return m.group(0)
+        rel, first, last = hit
+        return (f'<div id="ref-{m.group(1)}" class="csl-entry scrv-b scrv-ref" '
+                f'data-file="{escape(rel)}" data-lines="{first}-{last}"')
+    return REF_DIV.sub(tag, html)
 
 
 @lru_cache(maxsize=1)

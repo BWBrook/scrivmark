@@ -134,7 +134,7 @@ class Viewer:
 
     def anchor_from(self, rv: review.Review, body: dict) -> dict:
         rel = body["file"]
-        if rel not in rv.ms.files:
+        if rel not in rv.ms.sources:
             raise ScrivError(f"{rel} is not a manuscript file")
         first, last = (int(x) for x in body["lines"].split("-"))
         text = rv.text(rel)
@@ -303,7 +303,7 @@ def build_app(viewer: Viewer) -> Starlette:
     async def source_get(request: Request):
         rel = request.query_params["file"]
         ms = config.load(viewer.root)
-        if rel not in ms.files:
+        if rel not in ms.sources:
             raise ScrivError(f"{rel} is not a manuscript file")
         first, last = (int(x) for x in request.query_params["lines"].split("-"))
         lines = (viewer.root / rel).read_text().splitlines(keepends=True)
@@ -340,7 +340,7 @@ def build_app(viewer: Viewer) -> Starlette:
         b = await body_of(request)
         rv = viewer.need()
         viewer.check_render(b)
-        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"]))
+        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"], viewer.who(rv)))
 
     async def ask_update(request: Request):
         b = await body_of(request)
@@ -355,6 +355,8 @@ def build_app(viewer: Viewer) -> Starlette:
             t = review.comment(rv, review.anchor_at(rv, item["anchor"]["file"], s, e), b["comment"], viewer.who(rv), b.get("rev"))
             review.update_ask(rv, item["id"], done=True)
             return JSONResponse(t)
+        if b.get("apply"):
+            return JSONResponse(review.apply_ask(rv, item["id"], b.get("rev")))
         return JSONResponse(review.update_ask(rv, item["id"], done=bool(b.get("done"))))
 
     routes = [

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import config, gitutil, record
 from .errors import ScrivError
-from .review import BRANCH_PREFIX, Review, active, catalogue, drafts, is_managed, locate, rebase_anchors, threads
+from .review import BRANCH_PREFIX, Review, active, archive_asks, catalogue, drafts, is_managed, locate, rebase_anchors, threads
 from .state import ensure_ignored, transaction
 
 TAG = "scrivmark/{id}/{which}"
@@ -142,6 +142,7 @@ def _return_locked(root: Path) -> dict:
     rv.rec["changes"] = catalogue(root, rv.ms, rv.rec["round"]["base"], returned)
     orphans = rebase_anchors(rv, returned)
     rv.rec["round"].update({"status": "returned", "returned": returned, "integrated": rv.rec["round"]["base"]})
+    archive_asks(rv)
     record.path(root, rv.id).write_text(record.dumps(rv.rec))
     _commit(root, f"scrivmark: return review round {rv.id}", [rv.record_rel])
     gitutil.git(root, "tag", "-f", TAG.format(id=rv.id, which="base"), rv.rec["round"]["base"])
@@ -293,6 +294,7 @@ def _close_record(root: Path, rv: Review, force: bool) -> dict:
     rv.rec["round"].update({"status": "closed", "closed": record.now()})
     if force and (pending or open_threads):
         rv.rec["round"]["forced"] = True
+    archive_asks(rv)
     record.path(root, rv.id).write_text(record.dumps(rv.rec))
     _commit(root, f"scrivmark: close review round {rv.id}", [rv.record_rel])
     return {"round": rv.id, "forced": bool(rv.rec["round"].get("forced")), "invalidated": integration["invalidated"]}

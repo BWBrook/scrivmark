@@ -26,6 +26,11 @@ class Manuscript:
     def is_prose(self, path: str) -> bool:
         return path in self.files
 
+    @property
+    def sources(self) -> list[str]:
+        """Files a reader can comment on or edit from the viewer."""
+        return self.files + [b for b in self.bibliography if b not in self.files]
+
 
 def load(root: Path) -> Manuscript:
     path = root / CONFIG

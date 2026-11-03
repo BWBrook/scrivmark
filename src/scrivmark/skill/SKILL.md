@@ -17,6 +17,9 @@ scrivmark runs manuscript review on Markdown and Quarto sources in git:
 Always use `--json` when you need to read output. Never edit
 `reviews/*.json` or `.scrivmark/` by hand.
 
+This guide is loaded when your session starts. If scrivmark was upgraded since,
+`scrivmark skill` prints the current one; read it before going on.
+
 ## The viewer
 
 Start it in the background with `scrivmark serve`. It listens on port 8765
@@ -62,14 +65,22 @@ author: accept, reject, reply, resolve, edit.
 - **"Look at my selection."** Run `scrivmark selection --json`. It gives the
   file, lines and exact source text the human has selected. If `stale` is
   true, say so and ask them to reselect.
+- **References.** Entries in the rendered reference list map to their entries
+  in the bibliography files, so comments, asks and selections there point at
+  `refs.bib` (or the CSL YAML or JSON). If the bibliography is exported from a
+  reference manager, say so when proposing a fix: edits to the file would be
+  overwritten by the next export.
 - **"Check my asks."** The human queues questions on passages with the
   viewer's Ask button; each shows as a blue card in their margin.
   `scrivmark asks --json` lists the open ones with their passages. Answer each
-  with `scrivmark answer <id> --body "..."`: the answer appears on its card,
-  and the human can turn it into a comment for the author with one click, so
-  write answers that could stand as such a comment. Mention anything longer
-  in the chat too. If an answer implies a wording change, also leave a
-  `--draft` with `--wording`. Leave dismissing to the human.
+  with `scrivmark answer <id> --body "..." --by "<your model name>"`: the
+  answer appears on its card, and the human can turn it into a comment for the
+  author with one click, so write answers that could stand as such a comment.
+  Mention anything longer in the chat too. If the answer implies a wording
+  change, add `--wording "replacement for the asked-about passage"`; the card
+  then offers "Apply wording", so no separate draft is needed. Leave
+  dismissing to the human. Answered asks are archived in the round record
+  when the round is returned or closed, as part of the published exchange.
 - **Dictated comments and edits.** When the reviewer tells you what to say,
   use `scrivmark comment` without `--draft`; it is signed as theirs. When they
   ask for a change, edit the Markdown file directly. That edit *is* the

@@ -105,3 +105,35 @@ def test_launcher_port_comes_after_the_flag_and_before_the_config(monkeypatch):
     monkeypatch.delenv("PORT")
     assert server.choose_port(0, 9200) == 9200
     assert server.choose_port(0, None) == 8765
+
+
+def test_reference_list_entries_can_be_commented_on_and_edited(repo):
+    rv = rounds.start(repo)
+    viewer = Viewer(repo)
+    html = viewer.state()["html"]
+    entry = re.search(r'<div id="ref-royle2003" class="csl-entry scrv-b scrv-ref" data-file="refs.bib" data-lines="(\d+)-(\d+)"', html)
+    assert entry
+    lines = f"{entry.group(1)}-{entry.group(2)}"
+    c = TestClient(build_app(viewer), base_url="http://127.0.0.1")
+    h = {"x-scrivmark": viewer.token}
+    key = viewer.state()["key"]
+    t = c.post("/api/comment", headers=h, json={"file": "refs.bib", "lines": lines, "text": "Ecology", "before": "",
+                                                "key": key, "body": "Check the DOI.", "rev": rv.rev()}).json()
+    assert t["anchor"]["file"] == "refs.bib" and t["anchor"]["exact"] == "Ecology"
+    assert viewer.state()["threads"][0]["line"] == [int(entry.group(1))] * 2
+    src = c.get(f"/api/source?file=refs.bib&lines={lines}", headers=h).json()
+    assert src["text"].startswith("@article{royle2003")
+    r = c.post("/api/source", headers=h, json={"file": "refs.bib", "first": src["first"], "last": src["last"],
+                                               "text": src["text"].replace("year={2003}", "year={2004}"),
+                                               "file_rev": src["file_rev"]})
+    assert r.status_code == 200 and "year={2004}" in (repo / "refs.bib").read_text()
+
+
+def test_bibliography_entries_span_whole_csl_yaml_and_json_items():
+    from scrivmark.render import _bib_spans
+
+    y = ["---", "references:", "- id: a1", "  author:", "    - family: Brook", "  title: T", "",
+         "- type: book", '  id: "b2"', "..."]
+    assert _bib_spans("r.yaml", y) == [(2, 6, "a1"), (7, 8, "b2")]
+    j = ["[", '  {"id": "a1", "title": "Brace } in \\"t\\" {"},', "  {", '    "id": "b2"', "  }", "]"]
+    assert _bib_spans("r.json", j) == [(1, 1, "a1"), (2, 4, "b2")]

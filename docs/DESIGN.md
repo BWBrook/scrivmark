@@ -58,6 +58,7 @@ supported.
 | Record | Kept in the repository after merge |
 | Home | New public repo, `BWBrook/scrivmark`, independent of makedoc |
 | Who opens rounds | Either side |
+| Asks to the agent | Answered asks are archived in the round record at return and close, apart from threads; the Ask box says so |
 
 Barry on attribution: "having the labels inserted every time creates subtle but
 cumulative cognitive bandwidth for the student/receiver … KISS principle."
@@ -225,6 +226,14 @@ from `R` to the working tree.
 The record carries the base and reviewer text of every change, so it stays
 readable on its own after merge, and the tags keep the full snapshots.
 
+An optional `asks` array keeps the human–AI exchange behind the review: each
+answered ask, with its anchor, question, asker (`by`), answer, answerer
+(`answered_by`, the model when the agent gives it), any proposed `wording`
+and when it was `applied`. It is filled from `.scrivmark/<round>/asks.json`
+at return and again at close, so asks from both phases are kept, dismissed or
+not. Barry, 3 November 2026, chose "Always, with a notice" over per-ask or
+configurable archiving.
+
 ## Anchoring
 
 An anchor stores its file, the commit and character range it was made on, and
@@ -325,6 +334,7 @@ scrivmark accept|reject CHANGE
 scrivmark keep|drop DRAFT
 scrivmark selection                       the human's current viewer selection
 scrivmark asks [--done ID]                questions queued from the viewer
+scrivmark answer ASK --body TEXT [--wording TEXT] [--by MODEL]
 scrivmark doctor                          checks tools, config, resources, freeze cache
 ```
 
@@ -335,6 +345,11 @@ scrivmark doctor                          checks tools, config, resources, freez
   where it proposes text, for the reviewer to triage.
 - **Conversation.** The agent edits the source directly when asked, and
   comments as the reviewer when the reviewer dictates.
+
+The rendered reference list maps each entry back to its entry in the
+bibliography files (BibTeX, CSL YAML or CSL JSON), so it can be selected,
+commented on, asked about and edited like a manuscript block. Edits there are
+file-level changes in the catalogue.
 
 Local state (drafts, selection, asks, intents) lives in
 `.scrivmark/<round id>/`, git-ignored. The server enforces draft visibility,

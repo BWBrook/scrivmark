@@ -100,6 +100,20 @@ def doctor(as_json: Json = False):
         check("identity", True, f"{me.name} ({me.initials})")
     except ScrivError as e:
         check("identity", False, str(e))
+    from importlib.resources import files
+
+    current = (files("scrivmark") / "skill" / "SKILL.md").read_text()
+    for home in (Path.home() / ".claude", Path.home() / ".codex"):
+        guide = home / "skills" / "scrivmark" / "SKILL.md"
+        if not home.exists():
+            continue
+        if not guide.exists():
+            check(f"agent guide in {home.name}", False, "not installed; run `scrivmark skill --install`")
+        elif guide.read_text() != current:
+            check(f"agent guide in {home.name}", False, "out of date; run `scrivmark skill --install`")
+        else:
+            how = "linked" if guide.parent.is_symlink() else "copied; rerun `scrivmark skill --install` after upgrading"
+            check(f"agent guide in {home.name}", True, how)
     try:
         root = _root()
         ms = config.load(root)
@@ -131,7 +145,7 @@ def skill(install: Annotated[bool, typer.Option(help="Link the guide into ~/.cla
     from importlib.resources import as_file, files
 
     if not install:
-        typer.echo((files("scrivmark") / "skill" / "SKILL.md").read_text())
+        typer.echo((files("scrivmark") / "skill" / "SKILL.md").read_text(), nl=False)
         return
     with as_file(files("scrivmark") / "skill") as src:
         src = Path(src).resolve()
@@ -481,10 +495,13 @@ def asks(done: Annotated[Optional[str], typer.Option(help="Dismiss an ask (the h
 
 @app.command()
 def answer(ask_id: str, body: Annotated[str, typer.Option(help="Your answer, shown on the ask's card.")],
+           wording: Annotated[Optional[str], typer.Option(help="Replacement for the asked-about passage; the card offers to apply it.")] = None,
+           by: Annotated[Optional[str], typer.Option(help="Who answered, e.g. your model name; kept in the round record.")] = None,
            as_json: Json = False):
-    """Answer an ask; the answer appears on its card in the viewer (agents)."""
+    """Answer an ask; the answer appears on its card in the viewer (agents).
+    Answered asks are kept in the round record when the round is returned."""
     rv = review.active(_root())
-    a = review.update_ask(rv, ask_id, answer=body)
+    a = review.update_ask(rv, ask_id, answer=body, wording=wording, by=by)
     _emit(a, as_json, f"Answered {a['id']}.")
 
 

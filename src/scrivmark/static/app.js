@@ -154,7 +154,9 @@ function decorate() {
   }
   if (editable()) {
     for (const b of $$(".scrv-b", doc)) {
-      b.prepend(el("button", { class: "edit", title: "Edit this passage's Markdown", "aria-label": "Edit this passage",
+      const ref = b.classList.contains("scrv-ref");
+      b.prepend(el("button", { class: "edit", title: ref ? "Edit this reference's entry in the bibliography file" : "Edit this passage's Markdown",
+        "aria-label": ref ? "Edit this reference" : "Edit this passage",
         onclick: e => { e.stopPropagation(); startEdit(b); } }, "✎"));
     }
   }
@@ -309,10 +311,13 @@ function askCard(a) {
     el("div", { class: "tag" }, a.answer ? "Your agent answered" : "Question for your agent"),
     quoteLine(a),
     el("div", { class: "msg" }, el("span", { class: "by" }, "You"), a.question),
-    a.answer ? el("div", { class: "msg answer" }, el("span", { class: "by" }, "Agent"), a.answer)
-      : el("div", { class: "muted small" }, "Not answered yet. In the chat, ask your agent to “check my asks”."));
+    a.answer ? el("div", { class: "msg answer" }, el("span", { class: "by" }, a.answered_by || "Agent"), a.answer)
+      : el("div", { class: "muted small" }, "Not answered yet. In the chat, ask your agent to “check my asks”."),
+    a.answer && a.wording != null ? el("div", { class: "wording", title: a.applied ? "Applied as an edit" : "Proposed wording" },
+      a.applied ? `✓ Applied: ${a.wording || "(passage deleted)"}` : `→ ${a.wording || "(delete the passage)"}`) : null);
   c.append(el("div", { class: "acts" },
-    a.answer ? el("button", { class: "primary", onclick: e => { e.stopPropagation(); askComment(c, a); } }, "Comment from this") : null,
+    a.answer && a.wording != null && !a.applied ? el("button", { class: "primary", onclick: e => { e.stopPropagation(); applyAsk(a.id); } }, "Apply wording") : null,
+    a.answer ? el("button", { class: a.wording != null && !a.applied ? "" : "primary", onclick: e => { e.stopPropagation(); askComment(c, a); } }, "Comment from this") : null,
     el("button", { onclick: e => { e.stopPropagation(); dismissAsk(a.id); } }, "Dismiss")));
   return c;
 }
@@ -335,6 +340,10 @@ function askComment(card, a, restoring = false) {
       el("button", { onclick: () => closeComposer(key) }, "Cancel")));
   if (!restoring) ta.focus();
   layoutMargin();
+}
+
+async function applyAsk(id) {
+  try { await api("/api/ask/update", { ask: id, apply: true, rev: S.st.rev }); } catch (e) { fail(e); }
 }
 
 async function dismissAsk(id) {
@@ -532,7 +541,8 @@ tool.addEventListener("click", e => {
   ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) send(); if (ev.key === "Escape") closePop(); });
   pop.replaceChildren(
     el("div", { class: "muted" }, act === "comment" ? "Comment on the selection" : "Ask your agent about the selection"),
-    ta, el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, act === "comment" ? "Comment" : "Queue question"),
+    ta, act === "ask" ? el("div", { class: "muted small" }, "Asks and their answers are kept in the review record when the round is handed on.") : null,
+    el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, act === "comment" ? "Comment" : "Queue question"),
       el("button", { onclick: closePop }, "Cancel")));
   place(pop, s.rect);
   ta.focus();
