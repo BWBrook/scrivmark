@@ -10,7 +10,8 @@ from .blocks import Segment, guarded_segments, pandoc_blocks
 
 TOKEN = re.compile(
     r"""
-    (?P<cite>\[[^\[\]\n]*@[^\[\]\n]*\])
+    (?P<fnref>\[\^[^\]\s]+\](?!:))
+   |(?P<cite>\[[^\[\]\n]*@[^\[\]\n]*\])
    |(?P<link>!?\[[^\[\]\n]*\]\([^()\s]*(?:\s+"[^"]*")?\)(?:\{[^{}\n]*\})?)
    |(?P<math>\$\$.+?\$\$|\$[^$\s](?:[^$\n]*[^$\s])?\$)
    |(?P<code>`[^`\n]*`)
@@ -22,7 +23,7 @@ TOKEN = re.compile(
     """,
     re.X | re.S,
 )
-ATOMIC = {"cite", "link", "math", "code", "attr", "ref"}
+ATOMIC = {"fnref", "cite", "link", "math", "code", "attr", "ref"}
 TEXT_KINDS = {"para", "heading", "list", "footnote", "table", "div", "merged"}
 
 
@@ -119,7 +120,7 @@ def align(old: str, new: str) -> list[Op]:
                 oseg, nseg = os_[oi], ns[nj]
                 if oseg.kind in TEXT_KINDS and nseg.kind in TEXT_KINDS and _similar(okeys[oi], nkeys[nj]):
                     units = _token_hunks(old, new, oseg, nseg)
-                    if not units and _structure_differs(okeys[oi], nkeys[nj]):
+                    if _structure_differs(okeys[oi], _undo(new, nseg, units)):
                         block(oi, oi + 1, nj, nj + 1)
                     else:
                         ops.append(Op("pair", [oseg], [nseg], units))
@@ -130,11 +131,22 @@ def align(old: str, new: str) -> list[Op]:
     return ops
 
 
+def _undo(new: str, seg: Segment, units: list[Unit]) -> str:
+    """The new block with every unit reversed. If the catalogue is complete,
+    this has the same meaning as the old block."""
+    text = new[seg.b0 : seg.b1]
+    for u in sorted(units, key=lambda u: u.new, reverse=True):
+        a, b = u.new[0] - seg.b0, u.new[1] - seg.b0
+        text = text[:a] + u.old_text + text[b:]
+    return text
+
+
 def _structure_differs(a: str, b: str) -> bool:
-    """Whether a whitespace-only edit changes meaning (a hard line break, list
-    nesting), judged by pandoc."""
+    """Whether two texts differ in meaning (beyond reflowed whitespace),
+    judged by pandoc."""
+    soft = lambda j: j.replace('"t": "SoftBreak"', '"t": "Space"')  # noqa: E731
     try:
-        return pandoc_blocks(a) != pandoc_blocks(b)
+        return soft(pandoc_blocks(a)) != soft(pandoc_blocks(b))
     except (RuntimeError, FileNotFoundError):
         return True
 

@@ -37,15 +37,23 @@ def test_projection_range_and_point():
     assert pr.point(old.index("delta")) == new.index("delta")
 
 
+P = "\ufffc"
+
+
 def test_selection_maps_through_emphasis_and_citations():
-    src = "We saw *very* strong effects [@smith2020] in the north.\n"
-    s, e = map_selection(src, "very strong effects (Smith 2020) in the")
-    assert src[s:e].startswith("very") and src[s:e].endswith("in the")
+    src = "We saw *very* strong effects [@smith2020] in the north -- \"truly\".\n"
+    s, e = map_selection(src, f"very strong effects {P} in the north – “truly”")
+    assert src[s:e] == 'very* strong effects [@smith2020] in the north -- "truly"'
     s, e = map_selection(src, "strong effects")
     assert src[s:e] == "strong effects"
 
 
-def test_selection_does_not_truncate_at_a_repeated_phrase():
+def test_selection_is_exact_or_refused():
     src = "Start alpha beta. Gap [@smith] alpha beta.\n"
-    s, e = map_selection(src, "Start alpha beta. Gap (Smith 2020) alpha beta")
+    s, e = map_selection(src, f"Start alpha beta. Gap {P} alpha beta")
     assert src[s:e] == "Start alpha beta. Gap [@smith] alpha beta"
+    src = "First words [@smith] last words. Some intervening last words.\n"
+    s, e = map_selection(src, f"First words {P} last words")
+    assert src[s:e] == "First words [@smith] last words"
+    assert map_selection(src, "First words (Smith, Johnson, and Williams 2020) last words") is None
+    assert map_selection("one two. one two.\n", "one two") is None

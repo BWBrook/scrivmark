@@ -29,7 +29,8 @@ comment and accepts, rejects or replies.
 
 ## Five-minute tutorial
 
-You need `git`, `pandoc` (3.1 or later) and [`uv`](https://docs.astral.sh/uv/).
+You need `git`, `pandoc` (3.1 or later) and [`uv`](https://docs.astral.sh/uv/), on Linux, macOS or
+Windows through WSL (native Windows is not supported).
 
 ```bash
 uv tool install git+https://github.com/BWBrook/scrivmark
@@ -49,7 +50,7 @@ scrivmark skill --install
 ## On your own manuscript
 
 ```bash
-scrivmark init          # in the manuscript's repository: finds the sources and bibliography
+scrivmark init paper.md # in the manuscript's repository: the sources, in reading order
 scrivmark start         # reviewer: open a review round
 scrivmark serve         # read, edit and comment in the viewer
 scrivmark return        # hand it back; pushes and opens a pull request on GitHub
@@ -63,14 +64,15 @@ command. Authors can ask for a review with `scrivmark request`.
 ## How it works
 
 The design, and the decisions behind it, are in
-[`docs/DESIGN.md`](docs/DESIGN.md), with its independent review in
-[`docs/audits/`](docs/audits/). In short:
+[`docs/DESIGN.md`](docs/DESIGN.md), which also says what is built and what is
+still planned. Its independent reviews are in [`docs/audits/`](docs/audits/). In short:
 
 - a review round is a branch, `review/<round>`, cut from the author's branch;
 - when the reviewer returns it, every difference is frozen into a numbered
   list of changes in `reviews/<round>.json`, and tags keep both versions;
-- rejecting a change restores the original only if the text is exactly where
-  scrivmark expects; otherwise it refuses and changes nothing;
+- rejecting a change restores the original only if the text, and the text
+  around it, are exactly as scrivmark expects; otherwise it refuses and
+  changes nothing;
 - the author's own edits never need deciding;
 - closing merges the round with a merge commit, so the history shows the
   whole review.
@@ -88,6 +90,7 @@ Developed by Barry W. Brook with AI collaborators.
   adjudicated the reviews.
 - **Codex (`gpt-6.1-sol`)** carried out the independent adversarial reviews
   of the design and the code.
+- **GPT-6 Pro** carried out an external review of the whole repository, commissioned by Barry.
 
 ## Citation
 

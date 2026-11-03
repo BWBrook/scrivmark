@@ -150,7 +150,8 @@ local function label_pass(blocks, old)
     end,
     Header = function(h)
       if not old and kind_of(h.identifier) == "sec" then
-        labels[h.identifier] = { kind = "sec", title = stringify(h.content) }
+        local current = h.content:walk({ Span = function(s) if has_class(s, "scrv-del") then return {} end end })
+        labels[h.identifier] = { kind = "sec", title = stringify(current) }
       end
     end,
   })
@@ -243,11 +244,13 @@ local function render_deleted_cites(doc)
   m["suppress-bibliography"] = true
   m = pandoc.Meta(m)
   local ok, done = pcall(pandoc.utils.citeproc, pandoc.Pandoc(paras, m))
-  if not ok then return doc end
+  if not ok then io.stderr:write("scrivmark: deleted citations not rendered: " .. tostring(done) .. "\n"); return doc end
   local rendered = {}
   for i, para in ipairs(done.blocks) do
     local first = para.content and para.content[1]
-    if first and first.t == "Cite" then rendered[tostring(i)] = first.content end
+    if first and first.t == "Cite" then
+      rendered[tostring(i)] = first.content:walk({ Link = function(l) return l.content end })
+    end
   end
   return doc:walk({
     Span = function(sp)
@@ -261,7 +264,7 @@ end
 
 function Pandoc(doc)
   nonce = doc.meta["scrv-nonce"] and stringify(doc.meta["scrv-nonce"]) or ""
-  doc.blocks = doc.blocks:walk(sanitize)
+  doc = doc:walk(sanitize)
   doc.blocks = label_pass(doc.blocks, false)
   doc.blocks = refs_pass(doc.blocks, "", false)
   return render_deleted_cites(doc)

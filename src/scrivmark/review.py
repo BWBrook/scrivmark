@@ -14,7 +14,7 @@ from .textdiff import diff_units, projection
 
 BRANCH_PREFIX = "review/"
 CONTEXT = 32
-NEIGHBOURHOOD = 32
+NEIGHBOURHOOD = 40
 
 
 def is_managed(path: str) -> bool:
@@ -122,21 +122,65 @@ def _r_text(rv: Review, path: str) -> str:
     return gitutil.show(rv.root, rv.rec["round"]["returned"], path) or ""
 
 
-def locate(rv: Review, change: dict) -> tuple[int, int] | None:
-    """Where a text or block change now sits in the working file, or None if
-    the author has since changed it."""
+def expected(rv: Review, path: str) -> tuple[str, dict[str, tuple[int, int]]]:
+    """The returned text with every recorded rejection applied: what the file
+    would hold if the author had changed nothing else. Also each change's
+    range within it."""
+    r = _r_text(rv, path)
+    units = sorted((c for c in rv.rec["changes"] if c["file"] == path and c["type"] != "file"),
+                   key=lambda c: tuple(c["r_range"]))
+    parts, ranges, pos, length = [], {}, 0, 0
+    for c in units:
+        s, e = c["r_range"]
+        parts.append(r[pos:s])
+        length += s - pos
+        piece = c["base"] if c["decision"] == "rejected" else r[s:e]
+        parts.append(piece)
+        ranges[c["id"]] = (length, length + len(piece))
+        length += len(piece)
+        pos = e
+    parts.append(r[pos:])
+    return "".join(parts), ranges
+
+
+def target(rv: Review, change: dict) -> dict:
+    """Where a text or block change now sits, and how sure scrivmark is:
+
+    exact      the change and its surroundings are as scrivmark left them;
+    shifted    the change is intact but the text around it was edited;
+    ambiguous  the change is intact but its passage is repeated, so which
+               copy is the original cannot be established;
+    gone       the author has edited or deleted the change itself.
+    """
     cur = rv.text(change["file"])
     if cur is None:
-        return None
-    pr = projection(_r_text(rv, change["file"]), cur)
-    s, e = change["r_range"]
-    if s == e:
-        p = pr.point(s)
-        return None if p is None else (p, p)
-    r = pr.range(s, e)
-    if r is None or cur[r[0] : r[1]] != change["reviewer"]:
-        return None
-    return r
+        return {"state": "gone"}
+    exp, ranges = expected(rv, change["file"])
+    es, ee = ranges[change["id"]]
+    piece = exp[es:ee]
+    if cur == exp:
+        return {"state": "exact", "range": (es, ee)}
+    pr = projection(exp, cur)
+    r = pr.range(es, ee) if es < ee else (lambda p: None if p is None else (p, p))(pr.point(es))
+    if r is None or cur[r[0] : r[1]] != piece:
+        return {"state": "gone"}
+    left, right = min(NEIGHBOURHOOD, es, r[0]), min(NEIGHBOURHOOD, len(exp) - ee, len(cur) - r[1])
+    window = exp[es - left : ee + right]
+    if cur[r[0] - left : r[1] + right] != window:
+        return {"state": "shifted", "range": r}
+    in_exp, in_cur = _occurrences(exp, window), _occurrences(cur, window)
+    if len(in_exp) > 1 and pr.range(min(in_exp), max(in_exp) + len(window)) is None:
+        return {"state": "ambiguous", "range": r}
+    if len(in_cur) > 1:
+        return {"state": "ambiguous", "range": r}
+    return {"state": "exact", "range": r}
+
+
+def locate(rv: Review, change: dict) -> tuple[int, int] | None:
+    """Where a change now sits in the working file, or None if the author has
+    since changed it."""
+    t = target(rv, change)
+    return None if t["state"] == "gone" else t["range"]
 
 
 def _file_live(rv: Review, c: dict) -> bool:
@@ -145,7 +189,7 @@ def _file_live(rv: Review, c: dict) -> bool:
     if c["status"] == "D":
         return cur is None
     r_bytes = gitutil.show_bytes(rv.root, returned, c["file"])
-    if c["status"] == "R" and (rv.root / c["old_file"]).exists():
+    if r_bytes is None or (c["status"] == "R" and (rv.root / c["old_file"]).exists()):
         return False
     return cur == r_bytes
 
@@ -153,7 +197,7 @@ def _file_live(rv: Review, c: dict) -> bool:
 def change_status(rv: Review, c: dict) -> str:
     if c["decision"]:
         return c["decision"]
-    live = _file_live(rv, c) if c["type"] == "file" else locate(rv, c) is not None
+    live = _file_live(rv, c) if c["type"] == "file" else target(rv, c)["state"] != "gone"
     return "pending" if live else "superseded"
 
 
@@ -192,24 +236,46 @@ def _reject_writes(rv: Review, c: dict) -> dict:
         old = gitutil.show_bytes(rv.root, base, c["old_file"] or c["file"])
         if c["status"] == "A":
             return {c["file"]: None}
+        if old is None:
+            raise Conflict(f"The original of {c['old_file'] or c['file']} could not be read from git; nothing was changed.")
         if c["status"] == "R":
             return {c["file"]: None, c["old_file"]: old}
         return {c["file"]: old}
-    where = locate(rv, c)
-    if where is None:
-        raise Conflict(f"{c['id']} could not be located exactly; nothing was changed.")
+    t = target(rv, c)
+    if t["state"] != "exact":
+        why = {
+            "gone": "it has been edited since the review",
+            "shifted": "the text around it has been edited since the review",
+            "ambiguous": "the passage is repeated, so scrivmark cannot be sure which copy is the reviewer's",
+        }[t["state"]]
+        raise Conflict(f"{c['id']} was not rejected because {why}. Nothing was changed; edit the passage directly instead.")
     cur = rv.text(c["file"])
-    r_text = _r_text(rv, c["file"])
-    s, e = where
-    rs, re_ = c["r_range"]
-    left = min(NEIGHBOURHOOD, rs, s)
-    right = min(NEIGHBOURHOOD, len(r_text) - re_, len(cur) - e)
-    if r_text[rs - left : rs] != cur[s - left : s] or r_text[re_ : re_ + right] != cur[e : e + right]:
-        raise Conflict(
-            f"The text around {c['id']} has changed since the review, so scrivmark cannot be sure it is "
-            "restoring the right place. Nothing was changed; edit the passage directly instead."
-        )
+    s, e = t["range"]
     return {c["file"]: cur[:s] + c["base"] + cur[e:]}
+
+
+def undo(rv: Review, cid: str, expect: str | None = None) -> dict:
+    """Reopen a decision. Undoing a rejection puts the reviewer's text back,
+    only where scrivmark's own restoration is still exactly in place."""
+    if rv.status != "returned":
+        raise ScrivError("Decisions can be reopened only while the round is with the author.")
+    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+        rv.reload()
+        c = _find_change(rv, cid)
+        if not c["decision"]:
+            raise ScrivError(f"{cid} has no decision to undo.")
+        if c["decision"] == "rejected":
+            if c["type"] == "file":
+                raise Conflict("Undoing a whole-file rejection is not supported; restore the file with git.")
+            t = target(rv, c)
+            if t["state"] != "exact":
+                raise Conflict(f"The restored text for {cid} has been edited since, so the rejection cannot be undone safely.")
+            cur = rv.text(c["file"])
+            s, e = t["range"]
+            writes[c["file"]] = cur[:s] + c["reviewer"] + cur[e:]
+        c.update({"decision": None, "by": None, "at": None})
+        writes[rv.record_rel] = record.dumps(rv.rec)
+    return c
 
 
 # ---------------------------------------------------------------- anchoring
@@ -297,8 +363,15 @@ def _context_score(text: str, i: int, a: dict) -> int:
 
 
 def resolve(rv: Review, a: dict) -> dict:
-    """Locate an anchor in the current text: {'state': 'ok', 'range': [s, e]} or
-    {'state': 'orphan', 'candidates': [...]}."""
+    """Locate an anchor in the current text.
+
+    ok, exact   the passage is where it was, unchanged;
+    ok, edited  its surroundings are intact and the passage itself was edited;
+    ok, moved   it is no longer where it was, but occurs once elsewhere with
+                its full original context;
+    orphan      none of these holds. A lookalike passage elsewhere is listed
+                as a candidate, never adopted.
+    """
     cur = rv.text(a["file"])
     if cur is None:
         return {"state": "orphan", "candidates": []}
@@ -308,20 +381,17 @@ def resolve(rv: Review, a: dict) -> dict:
         s, e = a["range"]
         r = pr.range(s, e)
         if r and cur[r[0] : r[1]] == a["exact"]:
-            return {"state": "ok", "range": list(r)}
+            return {"state": "ok", "how": "exact", "range": list(r)}
         left = pr.range(max(0, s - 16), s)
         right = pr.range(e, min(len(old), e + 16))
         if left and right and left[1] <= right[0]:
-            return {"state": "ok", "range": [left[1], right[0]], "edited": True}
+            return {"state": "ok", "how": "edited", "edited": True, "range": [left[1], right[0]]}
     hits = _occurrences(cur, a["exact"])
-    if len(hits) == 1:
-        return {"state": "ok", "range": [hits[0], hits[0] + len(a["exact"])]}
-    if hits:
-        scored = sorted(((_context_score(cur, i, a), i) for i in hits), reverse=True)
-        full = len(a["prefix"]) + len(a["suffix"])
-        if scored[0][0] == full and scored[1][0] < full:
-            i = scored[0][1]
-            return {"state": "ok", "range": [i, i + len(a["exact"])]}
+    full = len(a["prefix"]) + len(a["suffix"])
+    whole = [i for i in hits if _context_score(cur, i, a) == full]
+    if len(whole) == 1 and a["exact"]:
+        i = whole[0]
+        return {"state": "ok", "how": "moved", "range": [i, i + len(a["exact"])]}
     return {"state": "orphan", "candidates": [[i, i + len(a["exact"])] for i in hits]}
 
 
@@ -427,7 +497,7 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
         if wording is not None:
             where = resolve(rv, anchor)
             cur = rv.text(anchor["file"])
-            if where["state"] != "ok" or where.get("edited") or cur[where["range"][0] : where["range"][1]] != anchor["exact"]:
+            if where["state"] != "ok" or where["how"] == "edited" or cur[where["range"][0] : where["range"][1]] != anchor["exact"]:
                 raise Conflict("The draft's passage has been edited since it was written, so its wording "
                                "was not applied. Edit the draft, or drop it.")
             s, e = where["range"]

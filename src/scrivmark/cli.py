@@ -54,11 +54,20 @@ def main() -> None:
 
 @app.command()
 def init(files: Annotated[Optional[list[str]], typer.Argument(help="Manuscript files in reading order.")] = None,
+         yes: Annotated[bool, typer.Option("--yes", help="Accept the detected files without naming them.")] = False,
          as_json: Json = False):
-    """Set up a repository for scrivmark: writes and commits scrivmark.toml."""
-    info = rounds.init(_root(), files)
-    _emit(info, as_json, f"Manuscript: {', '.join(info['files'])}\nBibliography: {', '.join(info['bibliography']) or 'none'}\n"
-          "Wrote and committed scrivmark.toml. Edit it to change the file order.")
+    """Set up a repository for scrivmark: writes and commits scrivmark.toml.
+
+    Name the manuscript files in reading order, e.g. `scrivmark init intro.md methods.md`.
+    With no files, it shows what it would detect; add --yes to accept that.
+    """
+    info = rounds.init(_root(), files, write=bool(files) or yes)
+    listing = f"Manuscript: {', '.join(info['files'])}\nBibliography: {', '.join(info['bibliography']) or 'none'}"
+    if not info["written"]:
+        _emit(info, as_json, listing + "\n\nNothing written yet. If that is right, run `scrivmark init --yes`; "
+              "otherwise name the files in reading order: `scrivmark init intro.md methods.md results.md`.")
+        return
+    _emit(info, as_json, listing + "\nWrote and committed scrivmark.toml. Edit it to change the file order.")
 
 
 @app.command()
@@ -98,7 +107,7 @@ def doctor(as_json: Json = False):
         for b in ms.bibliography:
             check(f"bibliography {b}", (root / b).exists())
         if any(f.endswith(".qmd") for f in ms.files):
-            check("quarto (for .qmd)", shutil.which("quarto"), "code outputs need Quarto's committed _freeze/")
+            check(".qmd rendering", True, "rendered with pandoc in this version; Quarto code outputs are not shown yet")
     except ScrivError as e:
         check("repository", False, str(e))
     _emit(checks, as_json, "\n".join(f"{'✓' if c['ok'] else '✗'} {c['check']}  {c['detail']}" for c in checks))
@@ -182,7 +191,13 @@ def return_(push: Annotated[bool, typer.Option(help="Push the round to origin if
     msg = f"Returned round {info['round']}: {info['changes']} changes, {info['threads']} comments."
     if info["orphans"]:
         msg += f"\nWarning: {len(info['orphans'])} comment(s) lost their passage: {', '.join(info['orphans'])}"
+    if info.get("resumed"):
+        msg = f"Round {info['round']} was already returned; publishing it."
     msg += "\nPushed to origin." if info["pushed"] else "\nNot pushed (no remote, or --no-push)."
+    if info.get("pr"):
+        msg += "\nThe pull request is up to date."
+    if info.get("pr_error"):
+        msg += "\n" + info["pr_error"]
     _emit(info, as_json, msg)
 
 
@@ -204,10 +219,11 @@ def open_(round_id: Annotated[str, typer.Argument(help="Round id, e.g. 2026-11-0
 
 
 @app.command()
-def close(force: Annotated[bool, typer.Option(help="Close even with undecided changes or open comments.")] = False,
+def close(round_id: Annotated[Optional[str], typer.Argument(help="Round to finish closing, if not checked out.")] = None,
+          force: Annotated[bool, typer.Option(help="Close even with undecided changes or open comments.")] = False,
           push: Annotated[bool, typer.Option()] = True, as_json: Json = False):
     """Finish the round and merge it into the author branch (author)."""
-    info = rounds.close_round(_root(), force, push)
+    info = rounds.close_round(_root(), force, push, round_id)
     d = info["decisions"]
     _emit(info, as_json, f"Closed round {info['round']} and merged it into {info['merged_into']}: "
           f"{d['accepted']} accepted, {d['rejected']} rejected, {d['superseded']} superseded by your edits.\n"
@@ -266,6 +282,14 @@ def accept(change_ids: Annotated[Optional[list[str]], typer.Argument()] = None, 
            expect: Expect = None, as_json: Json = False):
     """Accept changes (author)."""
     _decide(change_ids or [], all_, "accepted", expect, as_json)
+
+
+@app.command()
+def undo(change_id: str, expect: Expect = None, as_json: Json = False):
+    """Reopen a decision (author). Undoing a rejection puts the reviewer's text back."""
+    rv = review.active(_root())
+    c = review.undo(rv, change_id, expect)
+    _emit(c, as_json, f"{c['id']} is undecided again.")
 
 
 @app.command()

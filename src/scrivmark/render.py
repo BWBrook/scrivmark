@@ -8,12 +8,13 @@ that fails, the old block is shown struck through above the new one.
 """
 
 import json
+import re
 import secrets
 import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from . import gitutil
+from . import gitutil, sanitize
 from .blocks import PANDOC_FROM, fence_for, guarded_segments, line_of
 from .config import Manuscript
 from .textdiff import Op, Unit, align
@@ -38,12 +39,12 @@ class _Builder:
         lines = f"{line_of(self.cur, s)}-{line_of(self.cur, max(s, e - 1))}"
         classes = " ".join(f".{c}" for c in cls.split())
         attrs = _attrs(file=self.rel, lines=lines, c=change, n=self.nonce)
-        self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{body}\n{self.fence}\n\n")
+        self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{body}\n\n{self.fence}\n\n")
 
     def old(self, body: str, change: str | None) -> None:
         if body.strip():
             attrs = _attrs(file=self.rel, c=change, n=self.nonce)
-            self.parts.append(f"{self.fence} {{.scrv-old {attrs}}}\n{body}\n{self.fence}\n\n")
+            self.parts.append(f"{self.fence} {{.scrv-old {attrs}}}\n{_historical(body)}\n\n{self.fence}\n\n")
 
     def yaml(self, seg, first_file: bool) -> None:
         if first_file:
@@ -60,9 +61,17 @@ class _Builder:
             pos, _, current, reverted, cids = self.checks[i]
             head = self.parts[pos].split("\n", 1)[0].replace(".scrv-b", ".scrv-b .scrv-ins-block", 1)
             old = _attrs(file=self.rel, c=cids, n=self.nonce)
-            self.parts[pos] = (f"{self.fence} {{.scrv-old {old}}}\n{reverted}\n{self.fence}\n\n"
-                               f"{head}\n{current}\n{self.fence}\n\n")
+            self.parts[pos] = (f"{self.fence} {{.scrv-old {old}}}\n{_historical(reverted)}\n\n{self.fence}\n\n"
+                               f"{head}\n{current}\n\n{self.fence}\n\n")
         return self.parts
+
+
+FOOTNOTE_DEF = re.compile(r"^(\s{0,3})\[\^([^\]]+)\]:", re.M)
+
+
+def _historical(body: str) -> str:
+    """Old text shown for comparison must not define footnotes a second time."""
+    return FOOTNOTE_DEF.sub(r"\1\\[^\2]:", body)
 
 
 def _edges(text: str) -> tuple[str, str, str]:
@@ -130,7 +139,7 @@ def _verify(checks: list[tuple[int, str, str, str, str]], fence: str) -> set[int
     doc = []
     for i, (_, spliced, cur, rev, _) in enumerate(checks):
         for kind, body in (("s", spliced), ("c", cur), ("r", rev)):
-            doc.append(f"{fence} {{.scrv-g k=\"{i}{kind}\"}}\n{body}\n{fence}\n")
+            doc.append(f"{fence} {{.scrv-g k=\"{i}{kind}\"}}\n{body}\n\n{fence}\n")
     proc = subprocess.run(["pandoc", "-f", PANDOC_FROM, "-t", "json"], input="\n".join(doc),
                           capture_output=True, text=True)
     if proc.returncode != 0:
@@ -225,7 +234,8 @@ def manuscript_markdown(root: Path, ms: Manuscript, nonce: str, base: str | None
 def render(root: Path, ms: Manuscript, base: str | None = None,
            pending: dict[str, Pending] | None = None) -> tuple[str, str]:
     nonce = secrets.token_hex(8)
-    return to_html(root, ms, manuscript_markdown(root, ms, nonce, base, pending), nonce)
+    html, warnings = to_html(root, ms, manuscript_markdown(root, ms, nonce, base, pending), nonce)
+    return sanitize.clean(html), warnings
 
 
 def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str, str]:

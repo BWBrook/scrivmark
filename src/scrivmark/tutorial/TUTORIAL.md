@@ -8,6 +8,15 @@ responds. Nothing here touches Word.
 You need `git` and `pandoc`. If you are working with Claude Code or Codex, it
 can do any of the commands below for you; just ask.
 
+## 0. Say who you are (once)
+
+Your comments and edits are signed with your initials, and each review opens
+with one line saying how it was done. Set both once:
+
+```bash
+scrivmark whoami --name "Your Name" --statement "Reviewed by Your Name working with Claude."
+```
+
 ## 1. Review it (about 3 minutes)
 
 Start a review round and open the viewer:
@@ -47,10 +56,6 @@ When you're done, hand the round back:
 scrivmark return
 ```
 
-The comments carry your name. The round's opening line says how the review
-was done; set yours once with
-`scrivmark whoami --name "Your Name" --statement "Reviewed by Your Name working with Claude."`
-
 ## 2. Respond to it (about 2 minutes)
 
 Now be the author. Stop the viewer (Ctrl-C), then:
@@ -61,9 +66,11 @@ scrivmark open <round id> --as "Sam Student"
 scrivmark serve
 ```
 
-In the viewer, click a change to **Accept** or **Reject** it. Rejecting puts
-the original text back. Reply to the comments and **Resolve** them. Edit
-anything you like with ✎ as well; your own edits never need deciding.
+In the viewer, click a change to **Accept** or **Reject** it (or press `j` to
+move to it and Enter to decide). Rejecting puts the original text back, and
+each decision can be undone straight afterwards. Reply to the comments and
+**Resolve** them. Edit anything you like with ✎ as well; your own edits never
+need deciding.
 
 Then finish:
 
@@ -84,11 +91,13 @@ git log --oneline --graph
 In the manuscript's repository:
 
 ```bash
-scrivmark init
+scrivmark init paper.md
 ```
 
-This finds the Markdown or Quarto files and the bibliography, and writes
-`scrivmark.toml`. Check the file order there. After that:
+Name the manuscript files in reading order
+(`scrivmark init intro.md methods.md results.md discussion.md`), so notes and
+old drafts in the repository stay out of the review. `scrivmark init` on its
+own shows what it would pick, without writing anything. After that:
 
 - the reviewer runs `scrivmark start`, reviews, then `scrivmark return`. With
   a GitHub remote, this pushes the round and opens a pull request, which

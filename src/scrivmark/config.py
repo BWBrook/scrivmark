@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import subprocess
@@ -29,7 +30,10 @@ def load(root: Path) -> Manuscript:
     path = root / CONFIG
     if not path.exists():
         raise ScrivError(f"No {CONFIG} in {root}. Run `scrivmark init` first.")
-    data = tomllib.loads(path.read_text())
+    try:
+        data = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise ScrivError(f"{CONFIG} is not valid TOML: {e}") from e
     m = data.get("manuscript", {})
     files = m.get("files") or []
     if not files:
@@ -51,12 +55,17 @@ def detect(root: Path) -> dict:
     return {"files": files, "bibliography": bibs, "csl": csl[0] if csl else None}
 
 
+def _toml(s: str) -> str:
+    """A TOML basic string. JSON's string escapes are valid TOML."""
+    return json.dumps(s, ensure_ascii=False)
+
+
 def write(root: Path, files: list[str], bibliography: list[str], csl: str | None) -> Path:
     lines = ["[manuscript]", "# Source files in reading order."]
-    lines.append("files = [" + ", ".join(f'"{f}"' for f in files) + "]")
-    lines.append("bibliography = [" + ", ".join(f'"{b}"' for b in bibliography) + "]")
+    lines.append("files = [" + ", ".join(_toml(f) for f in files) + "]")
+    lines.append("bibliography = [" + ", ".join(_toml(b) for b in bibliography) + "]")
     if csl:
-        lines.append(f'csl = "{csl}"')
+        lines.append(f"csl = {_toml(csl)}")
     path = root / CONFIG
     path.write_text("\n".join(lines) + "\n")
     return path
@@ -78,7 +87,10 @@ def identity() -> Identity:
     if name := os.environ.get("SCRIVMARK_AS"):
         return Identity(name, initials_of(name))
     if IDENTITY.exists():
-        data = tomllib.loads(IDENTITY.read_text()).get("identity", {})
+        try:
+            data = tomllib.loads(IDENTITY.read_text()).get("identity", {})
+        except tomllib.TOMLDecodeError as e:
+            raise ScrivError(f"{IDENTITY} is not valid TOML ({e}); fix it or rerun `scrivmark whoami`.") from e
         if data.get("name"):
             return Identity(data["name"], data.get("initials") or initials_of(data["name"]), data.get("statement"))
     proc = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True)
@@ -93,9 +105,9 @@ def identity() -> Identity:
 
 def set_identity(name: str, initials: str, statement: str | None = None) -> Path:
     IDENTITY.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["[identity]", f'name = "{name}"', f'initials = "{initials}"']
+    lines = ["[identity]", f"name = {_toml(name)}", f"initials = {_toml(initials)}"]
     if statement:
-        lines.append(f'statement = "{statement}"')
+        lines.append(f"statement = {_toml(statement)}")
     IDENTITY.write_text("\n".join(lines) + "\n")
     return IDENTITY
 

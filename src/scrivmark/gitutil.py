@@ -48,27 +48,38 @@ def show_bytes(repo: Path, commit: str, path: str) -> bytes | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
+def _nul(out: str) -> list[str]:
+    return [x for x in out.split("\0") if x]
+
+
 def dirty_paths(repo: Path, ignore_prefixes: tuple[str, ...] = ()) -> list[str]:
-    out = git(repo, "status", "--porcelain", "--untracked-files=all")
-    paths = []
-    for line in out.splitlines():
-        path = line[3:].split(" -> ")[-1].strip('"')
+    fields = _nul(git(repo, "status", "--porcelain", "-z", "--untracked-files=all"))
+    paths, i = [], 0
+    while i < len(fields):
+        entry = fields[i]
+        code, path = entry[:2], entry[3:]
+        i += 2 if ("R" in code or "C" in code) else 1
         if not path.startswith(ignore_prefixes):
             paths.append(path)
     return paths
 
 
+def untracked(repo: Path) -> list[str]:
+    return _nul(git(repo, "ls-files", "--others", "--exclude-standard", "-z"))
+
+
 def name_status(repo: Path, a: str, b: str) -> list[tuple[str, str, str | None]]:
     """(status letter, path, old path for renames) for every change from a to b."""
-    out = git(repo, "diff", "--name-status", "-M", "--no-color", a, b)
-    result = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        status = parts[0][0]
-        if status == "R":
-            result.append(("R", parts[2], parts[1]))
+    fields = _nul(git(repo, "diff", "--name-status", "-M", "-z", "--no-color", a, b))
+    result, i = [], 0
+    while i < len(fields):
+        status = fields[i][0]
+        if status in "RC":
+            result.append(("R" if status == "R" else "A", fields[i + 2], fields[i + 1]))
+            i += 3
         else:
-            result.append((status, parts[1], None))
+            result.append((status, fields[i + 1], None))
+            i += 2
     return result
 
 

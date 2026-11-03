@@ -28,6 +28,8 @@ from .state import atomic_write, local_dir, read_json, revision
 
 STATIC = files("scrivmark") / "static"
 COOKIE = "scrivmark"
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
+       "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
 
 
 class Viewer:
@@ -61,7 +63,8 @@ class Viewer:
         ms = config.load(self.root)
         rv = self.current()
         branch = gitutil.current_branch(self.root)
-        key_paths = ms.files + ms.bibliography + ([rv.record_rel, rv.drafts_rel] if rv else [])
+        key_paths = [config.CONFIG, *ms.files, *ms.bibliography, *([ms.csl] if ms.csl else []),
+                     *([rv.record_rel, rv.drafts_rel] if rv else [])]
         key = f"{branch}:{revision(self.root, key_paths)}"
         if self.cache and self.cache[0] == key:
             return self.cache[1]
@@ -191,7 +194,7 @@ def build_app(viewer: Viewer) -> Starlette:
     async def index(request: Request):
         if request.query_params.get("t") != viewer.token and not authorised(request):
             return HTMLResponse("<p>Open the address that <code>scrivmark serve</code> printed.</p>", status_code=403)
-        resp = HTMLResponse((STATIC / "index.html").read_text())
+        resp = HTMLResponse((STATIC / "index.html").read_text(), headers={"Content-Security-Policy": CSP})
         resp.set_cookie(viewer.cookie, viewer.token, httponly=True, samesite="strict")
         return resp
 
@@ -259,6 +262,11 @@ def build_app(viewer: Viewer) -> Starlette:
         rv = viewer.need()
         decision = {"accept": "accepted", "reject": "rejected"}[b["decision"]]
         return JSONResponse(review.decide(rv, b["change"], decision, viewer.who(rv), b.get("rev")))
+
+    async def undo(request: Request):
+        b = await body_of(request)
+        rv = viewer.need()
+        return JSONResponse(review.undo(rv, b["change"], b.get("rev")))
 
     async def triage(request: Request):
         b = await body_of(request)
@@ -329,6 +337,7 @@ def build_app(viewer: Viewer) -> Starlette:
         Route("/api/thread", guard(thread_status, True), methods=["POST"]),
         Route("/api/decide", guard(decide, True), methods=["POST"]),
         Route("/api/draft", guard(triage, True), methods=["POST"]),
+        Route("/api/undo", guard(undo, True), methods=["POST"]),
         Route("/api/selection", guard(selection, True), methods=["POST"]),
         Route("/api/ask", guard(ask, True), methods=["POST"]),
     ]

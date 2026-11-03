@@ -11,7 +11,9 @@ import re
 
 from .textdiff import tokens
 
-GENERATED = {"cite", "ref", "math"}
+GENERATED = {"fnref", "cite", "ref", "math"}
+TYPOGRAPHY = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                            "\u2013": "-", "\u2014": "-", "\u00a0": " "})
 PLACEHOLDER = "￼"
 
 
@@ -20,10 +22,14 @@ def _plain(src: str) -> tuple[str, list[tuple[int, int]]]:
     spans: list[tuple[int, int]] = []
 
     def emit(ch: str, s: int, e: int) -> None:
+        ch = ch.translate(TYPOGRAPHY)
         if ch.isspace():
             if chars and chars[-1] == " ":
                 return
             ch = " "
+        if ch == "-" and chars and chars[-1] == "-" and spans[-1][1] == s:
+            spans[-1] = (spans[-1][0], e)
+            return
         chars.append(ch)
         spans.append((s, e))
 
@@ -53,55 +59,36 @@ def _plain(src: str) -> tuple[str, list[tuple[int, int]]]:
 
 
 def _norm(s: str) -> str:
+    s = s.translate(TYPOGRAPHY).replace("\u2026", "...")
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _find_start(plain: str, sel: str, before: str) -> int | None:
-    for k in range(min(24, len(sel)), 3, -1):
-        hits = [m.start() for m in re.finditer(re.escape(sel[:k]), plain)]
-        if len(hits) == 1:
-            return hits[0]
-        if hits:
-            b = _norm(before)
-            def score(i: int) -> int:
-                pre = plain[:i].rstrip()
-                n = 0
-                while n < min(len(pre), len(b)) and pre[len(pre) - 1 - n] == b[len(b) - 1 - n]:
-                    n += 1
-                return n
-            ranked = sorted(hits, key=score, reverse=True)
-            if len(ranked) == 1 or score(ranked[0]) > score(ranked[1]):
-                return ranked[0]
-            return None
-    return None
-
-
-def _find_end(plain: str, sel: str, start: int) -> int | None:
-    """The end whose span length best matches the selection; refuse ties."""
-    for k in range(min(24, len(sel)), 3, -1):
-        ends = [m.start() + k for m in re.finditer(re.escape(sel[-k:]), plain) if m.start() >= start]
-        if not ends:
-            continue
-        ranked = sorted(ends, key=lambda x: abs((x - start) - len(sel)))
-        if len(ranked) > 1 and abs((ranked[0] - start) - len(sel)) == abs((ranked[1] - start) - len(sel)):
-            return None
-        return ranked[0]
-    return None
+def _before_score(plain: str, i: int, before: str) -> int:
+    pre, b = plain[:i].rstrip(), _norm(before)
+    n = 0
+    while n < min(len(pre), len(b)) and pre[len(pre) - 1 - n] == b[len(b) - 1 - n]:
+        n += 1
+    return n
 
 
 def map_selection(src: str, text: str, before: str = "") -> tuple[int, int] | None:
-    """Offsets within `src` of the rendered selection `text`, or None."""
+    """Offsets within `src` of the rendered selection, or None when it cannot
+    be placed exactly (the caller then anchors to the whole block).
+
+    The page sends the selection with generated material (citations,
+    cross-references, maths, footnote marks) already replaced by the
+    placeholder, so a faithful selection matches the plain source exactly.
+    """
     plain, spans = _plain(src)
     sel = _norm(text)
     if len(sel) < 2:
         return None
-    if sel in plain and plain.count(sel) == 1:
-        i = plain.index(sel)
-        return spans[i][0], spans[i + len(sel) - 1][1]
-    start = _find_start(plain, sel, before)
-    if start is None:
+    hits = [m.start() for m in re.finditer(re.escape(sel), plain)]
+    if len(hits) > 1 and before:
+        ranked = sorted(hits, key=lambda i: _before_score(plain, i, before), reverse=True)
+        if _before_score(plain, ranked[0], before) > _before_score(plain, ranked[1], before):
+            hits = ranked[:1]
+    if len(hits) != 1:
         return None
-    end = _find_end(plain, sel, start)
-    if end is None or end <= start:
-        return None
-    return spans[start][0], spans[end - 1][1]
+    i = hits[0]
+    return spans[i][0], spans[i + len(sel) - 1][1]

@@ -172,7 +172,7 @@ def _wrap(text: str, segs: list[Segment], fence: str) -> str:
         if s.kind == "yaml":
             parts.append(body + "\n\n")
         else:
-            parts.append(f"{fence} {{.scrv-b}}\n{body}\n{fence}\n\n")
+            parts.append(f"{fence} {{.scrv-b}}\n{body}\n\n{fence}\n\n")
     return "".join(parts)
 
 

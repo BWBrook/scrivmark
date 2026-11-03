@@ -9,6 +9,22 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
+## Implementation status (3 November 2026, version 0.1)
+
+Built: the round lifecycle over plain git, with pull requests through `gh`;
+the frozen change catalogue, decisions and undo; anchoring; the full agent
+CLI; the viewer (pandoc rendering, redline, margin, selection, flip-to-source
+editing, live updates, keyboard decisions); the tutorial and the agent guide.
+
+Not yet built, though described below: rendering `.qmd` through Quarto
+itself, with freeze-cache code outputs (`.qmd` renders with pandoc for now);
+`scrivmark inbox`; detection of makedoc profiles and `_quarto.yml` chapter
+order in `init`; re-attaching orphaned comments from the viewer; the viewer
+starting itself on `start` and `open`. The HTML clean-up is a stdlib
+allowlist plus a Content Security Policy, not `nh3`. Supported platforms are
+Linux, macOS and WSL; the file lock uses `fcntl`, so native Windows is not
+supported.
+
 ## Principles
 
 1. **The Markdown is the only text.** Every edit is a real edit to the source
