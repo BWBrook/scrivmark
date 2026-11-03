@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Project name"
+authors:
+  - family-names: Brook
+    given-names: Barry W.
+    orcid: "https://orcid.org/0000-0002-2491-1517"
+    affiliation: University of Tasmania
+license: MIT
+repository-code: "https://github.com/BWBrook/project-name"

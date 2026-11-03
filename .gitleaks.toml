@@ -1,0 +1,15 @@
+# Default gitleaks rules plus allowlists for false positives common in research repos.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Bibliography keys, citation styles and content digests"
+paths = [
+  '''(^|/)[^/]*\.csl$''',
+]
+regexes = [
+  # CSL-YAML/JSON citation keys such as `key: brook2026` or "key": "smith2019"
+  '''(?i)["']?key["']?\s*:\s*["'`]?[A-Za-z][A-Za-z0-9_:.-]*["'`]?\s*$''',
+  # Hex digests recorded as hashes or checksums
+  '''(?i)(sha256|sha1|md5|digest|hash|checksum)[A-Za-z_]*["']?\s*[:=]\s*["'`]?[0-9a-f]{32,64}["'`]?''',
+]

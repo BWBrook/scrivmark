@@ -1,0 +1,32 @@
+# Untracked local data and outputs (fetch or regenerate by script)
+local/
+outputs/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# Agent run logs and local agent state
+*.events.jsonl
+rollout-*.jsonl
+.claude/worktrees/
+.claude/settings.local.json
+
+# Environments and caches
+.venv/
+__pycache__/
+renv/library/
+renv/staging/
+.Rhistory
+.RData
+.Rproj.user/
+_targets/
+*_cache/
+
+# Operating systems
+.DS_Store
+Thumbs.db
