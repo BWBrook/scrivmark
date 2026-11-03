@@ -34,9 +34,6 @@ def load(root: Path) -> Manuscript:
     files = m.get("files") or []
     if not files:
         raise ScrivError(f"{CONFIG} lists no manuscript files")
-    for f in files:
-        if not (root / f).exists():
-            raise ScrivError(f"{CONFIG} lists {f}, which does not exist")
     bib = m.get("bibliography") or []
     return Manuscript(root, files, [bib] if isinstance(bib, str) else bib, m.get("csl"), m.get("title"))
 

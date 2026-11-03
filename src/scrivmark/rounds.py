@@ -9,7 +9,7 @@ from pathlib import Path
 from . import config, gitutil, record
 from .errors import ScrivError
 from .review import BRANCH_PREFIX, Review, active, catalogue, drafts, is_managed, locate, rebase_anchors, threads
-from .state import ensure_ignored
+from .state import ensure_ignored, transaction
 
 TAG = "scrivmark/{id}/{which}"
 
@@ -112,6 +112,12 @@ def request(root: Path, reviewer_name: str, reviewer_initials: str, github_user:
 
 
 def return_round(root: Path, push: bool = True) -> dict:
+    with transaction(root):
+        info = _return_locked(root)
+    return _publish_return(root, info, push)
+
+
+def _return_locked(root: Path) -> dict:
     rv = active(root)
     if rv.status != "open":
         raise ScrivError(f"Round {rv.id} is {rv.status}, not open.")
@@ -127,6 +133,13 @@ def return_round(root: Path, push: bool = True) -> dict:
     _commit(root, f"scrivmark: return review round {rv.id}", [rv.record_rel])
     gitutil.git(root, "tag", "-f", TAG.format(id=rv.id, which="base"), rv.rec["round"]["base"])
     gitutil.git(root, "tag", "-f", TAG.format(id=rv.id, which="returned"), returned)
+    return {"round": rv.id, "returned": returned, "changes": len(rv.rec["changes"]),
+            "threads": len(rv.rec["threads"]), "orphans": orphans, "pushed": False, "pr": False}
+
+
+def _publish_return(root: Path, info: dict, push: bool) -> dict:
+    rv = active(root)
+    returned = info["returned"]
     pushed = pr = False
     if push and gitutil.has_remote(root):
         gitutil.git(root, "push", "-q", "-u", "origin", f"{BRANCH_PREFIX}{rv.id}")
@@ -149,8 +162,7 @@ def return_round(root: Path, push: bool = True) -> dict:
                     cwd=root, capture_output=True,
                 )
             pr = True
-    return {"round": rv.id, "returned": returned, "changes": len(rv.rec["changes"]),
-            "threads": len(rv.rec["threads"]), "orphans": orphans, "pushed": pushed, "pr": pr}
+    return dict(info, pushed=pushed, pr=pr)
 
 
 def _author_tip(root: Path, branch: str) -> str:
@@ -164,22 +176,22 @@ def _author_tip(root: Path, branch: str) -> str:
 
 
 def integrate(rv: Review) -> dict:
-    """Merge the author branch into the round if it has moved; decisions on
-    changes the merge disturbed are cleared."""
+    """Bring in the author branch if it has moved (merging it, or noting a merge
+    already completed by hand), then clear decisions on accepted changes that
+    the merge disturbed."""
     rnd = rv.rec["round"]
     tip = _author_tip(rv.root, rnd["author_branch"])
-    if tip == rnd["integrated"] or gitutil.ok(rv.root, "merge-base", "--is-ancestor", tip, "HEAD"):
-        if tip != rnd["integrated"]:
-            rnd["integrated"] = tip
-            record.path(rv.root, rv.id).write_text(record.dumps(rv.rec))
-            _commit(rv.root, f"scrivmark: record integrated author branch for {rv.id}", [rv.record_rel])
+    if tip == rnd["integrated"]:
         return {"merged": False, "invalidated": []}
-    proc = subprocess.run(["git", "merge", "--no-edit", "-q", tip], cwd=rv.root, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise ScrivError(
-            f"Merging {rnd['author_branch']} into the round hit conflicts. Resolve them in the source, "
-            f"commit, then run the command again.\n{proc.stdout}{proc.stderr}"
-        )
+    merged = False
+    if not gitutil.ok(rv.root, "merge-base", "--is-ancestor", tip, "HEAD"):
+        proc = subprocess.run(["git", "merge", "--no-edit", "-q", tip], cwd=rv.root, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise ScrivError(
+                f"Merging {rnd['author_branch']} into the round hit conflicts. Resolve them in the source, "
+                f"commit, then run the command again.\n{proc.stdout}{proc.stderr}"
+            )
+        merged = True
     rv.reload()
     invalidated = []
     for c in rv.rec["changes"]:
@@ -189,7 +201,7 @@ def integrate(rv: Review) -> dict:
     rv.rec["round"]["integrated"] = tip
     record.path(rv.root, rv.id).write_text(record.dumps(rv.rec))
     _commit(rv.root, f"scrivmark: record integrated author branch for {rv.id}", [rv.record_rel])
-    return {"merged": True, "invalidated": invalidated}
+    return {"merged": merged, "invalidated": invalidated}
 
 
 def open_round(root: Path, round_id: str) -> dict:
@@ -200,12 +212,17 @@ def open_round(root: Path, round_id: str) -> dict:
         _require_clean(root, "open a round")
         if gitutil.ok(root, "rev-parse", "--verify", f"refs/heads/{branch}"):
             gitutil.git(root, "checkout", "-q", branch)
-            if gitutil.ok(root, "rev-parse", "--verify", f"origin/{branch}"):
-                gitutil.git(root, "merge", "-q", "--ff-only", f"origin/{branch}", check=False)
         elif gitutil.ok(root, "rev-parse", "--verify", f"origin/{branch}"):
             gitutil.git(root, "checkout", "-q", "-b", branch, "--track", f"origin/{branch}")
         else:
             raise ScrivError(f"No round {round_id} here or on origin.")
+    remote = f"origin/{branch}"
+    if gitutil.has_remote(root) and gitutil.ok(root, "rev-parse", "--verify", remote) \
+            and not gitutil.ok(root, "merge-base", "--is-ancestor", remote, "HEAD"):
+        _require_clean(root, "update the round from origin")
+        proc = subprocess.run(["git", "merge", "-q", "--ff-only", remote], cwd=root, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise ScrivError(f"The round here and on origin have diverged; settle it with git first.\n{proc.stderr}")
     rv = active(root)
     result = {"round": rv.id, "status": rv.status, "merged": False, "invalidated": []}
     if rv.status == "returned":
@@ -220,11 +237,24 @@ def open_round(root: Path, round_id: str) -> dict:
 
 
 def close_round(root: Path, force: bool = False, push: bool = True) -> dict:
+    with transaction(root):
+        rv = active(root)
+        if rv.status == "closed":
+            info = {"round": rv.id, "forced": bool(rv.rec["round"].get("forced")), "invalidated": []}
+        elif rv.status == "returned":
+            info = _close_record(root, rv, force)
+        else:
+            raise ScrivError(f"Round {rv.id} is {rv.status}; only a returned round can be closed.")
+    rv = active(root)
+    info["merged_into"] = _merge_closed(root, rv, push)
+    info["decisions"] = {k: sum(1 for c in rv.rec["changes"] if c["decision"] == k)
+                         for k in ("accepted", "rejected", "superseded")}
+    return info
+
+
+def _close_record(root: Path, rv: Review, force: bool) -> dict:
     from .review import changes as list_changes
 
-    rv = active(root)
-    if rv.status != "returned":
-        raise ScrivError(f"Round {rv.id} is {rv.status}; only a returned round can be closed.")
     _commit_work(root, f"scrivmark: author responses for {rv.id}")
     integration = integrate(rv)
     cs = list_changes(rv)
@@ -245,35 +275,39 @@ def close_round(root: Path, force: bool = False, push: bool = True) -> dict:
         rv.rec["round"]["forced"] = True
     record.path(root, rv.id).write_text(record.dumps(rv.rec))
     _commit(root, f"scrivmark: close review round {rv.id}", [rv.record_rel])
-    head = gitutil.rev(root, "HEAD")
+    return {"round": rv.id, "forced": bool(rv.rec["round"].get("forced")), "invalidated": integration["invalidated"]}
+
+
+def _merge_closed(root: Path, rv: Review, push: bool) -> str:
+    """Merge a closed round into its author branch. Safe to rerun: a step that
+    failed (a push, a refused merge) can be retried with `scrivmark close`."""
     target = rv.rec["round"]["author_branch"]
-    tip = _author_tip(root, target)
-    if tip != rv.rec["round"]["integrated"]:
-        raise ScrivError(f"{target} moved while closing; run `scrivmark close` again.")
     branch = f"{BRANCH_PREFIX}{rv.id}"
-    merged_remotely = False
+    head = gitutil.rev(root, branch)
+    if gitutil.ok(root, "merge-base", "--is-ancestor", head, target):
+        if gitutil.current_branch(root) != target:
+            gitutil.git(root, "checkout", "-q", target)
+        return target
+    tip = _author_tip(root, target)
+    if tip != rv.rec["round"]["integrated"] and not gitutil.ok(root, "merge-base", "--is-ancestor", tip, head):
+        raise ScrivError(f"{target} has moved since the round was closed. Merge {target} into {branch}, "
+                         "then run `scrivmark close` again.")
     if push and gitutil.has_remote(root):
         gitutil.git(root, "push", "-q", "origin", branch)
         if _gh() and _on_github(root) and subprocess.run(["gh", "pr", "view", branch], cwd=root, capture_output=True).returncode == 0:
             subprocess.run(["gh", "pr", "ready", branch], cwd=root, capture_output=True)
-            gitutil.git(root, "checkout", "-q", target)
-            proc = subprocess.run(
-                ["gh", "pr", "merge", branch, "--merge", "--match-head-commit", head],
-                cwd=root, capture_output=True, text=True,
-            )
+            proc = subprocess.run(["gh", "pr", "merge", branch, "--merge", "--match-head-commit", head],
+                                  cwd=root, capture_output=True, text=True)
             if proc.returncode != 0:
-                raise ScrivError(f"GitHub refused the merge:\n{proc.stderr}")
+                raise ScrivError(f"GitHub refused the merge (run `scrivmark close` again once fixed):\n{proc.stderr}")
+            gitutil.git(root, "checkout", "-q", target)
             gitutil.git(root, "pull", "-q", "--ff-only", "origin", target)
-            merged_remotely = True
-    if not merged_remotely:
-        gitutil.git(root, "checkout", "-q", target)
-        gitutil.git(root, "merge", "-q", "--no-ff", branch, "-m", f"Merge review round {rv.id}")
-        if push and gitutil.has_remote(root):
-            gitutil.git(root, "push", "-q", "origin", target)
-    return {"round": rv.id, "merged_into": target, "forced": bool(rv.rec["round"].get("forced")),
-            "invalidated": integration["invalidated"],
-            "decisions": {k: sum(1 for c in rv.rec["changes"] if c["decision"] == k)
-                          for k in ("accepted", "rejected", "superseded")}}
+            return target
+    gitutil.git(root, "checkout", "-q", target)
+    gitutil.git(root, "merge", "-q", "--no-ff", branch, "-m", f"Merge review round {rv.id}")
+    if push and gitutil.has_remote(root):
+        gitutil.git(root, "push", "-q", "origin", target)
+    return target
 
 
 def list_rounds(root: Path) -> list[dict]:

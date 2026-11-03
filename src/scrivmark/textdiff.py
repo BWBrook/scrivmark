@@ -6,7 +6,7 @@ from bisect import bisect_right
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from .blocks import Segment, guarded_segments
+from .blocks import Segment, guarded_segments, pandoc_blocks
 
 TOKEN = re.compile(
     r"""
@@ -118,12 +118,25 @@ def align(old: str, new: str) -> list[Op]:
             for oi, nj in zip(range(i1, i2), range(j1, j2)):
                 oseg, nseg = os_[oi], ns[nj]
                 if oseg.kind in TEXT_KINDS and nseg.kind in TEXT_KINDS and _similar(okeys[oi], nkeys[nj]):
-                    ops.append(Op("pair", [oseg], [nseg], _token_hunks(old, new, oseg, nseg)))
+                    units = _token_hunks(old, new, oseg, nseg)
+                    if not units and _structure_differs(okeys[oi], nkeys[nj]):
+                        block(oi, oi + 1, nj, nj + 1)
+                    else:
+                        ops.append(Op("pair", [oseg], [nseg], units))
                 else:
                     block(oi, oi + 1, nj, nj + 1)
         else:
             block(i1, i2, j1, j2)
     return ops
+
+
+def _structure_differs(a: str, b: str) -> bool:
+    """Whether a whitespace-only edit changes meaning (a hard line break, list
+    nesting), judged by pandoc."""
+    try:
+        return pandoc_blocks(a) != pandoc_blocks(b)
+    except (RuntimeError, FileNotFoundError):
+        return True
 
 
 def diff_units(old: str, new: str) -> list[Unit]:

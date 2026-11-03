@@ -43,3 +43,9 @@ def test_selection_maps_through_emphasis_and_citations():
     assert src[s:e].startswith("very") and src[s:e].endswith("in the")
     s, e = map_selection(src, "strong effects")
     assert src[s:e] == "strong effects"
+
+
+def test_selection_does_not_truncate_at_a_repeated_phrase():
+    src = "Start alpha beta. Gap [@smith] alpha beta.\n"
+    s, e = map_selection(src, "Start alpha beta. Gap (Smith 2020) alpha beta")
+    assert src[s:e] == "Start alpha beta. Gap [@smith] alpha beta"

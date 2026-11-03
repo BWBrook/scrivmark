@@ -14,6 +14,7 @@ from .textdiff import diff_units, projection
 
 BRANCH_PREFIX = "review/"
 CONTEXT = 32
+NEIGHBOURHOOD = 32
 
 
 def is_managed(path: str) -> bool:
@@ -198,7 +199,16 @@ def _reject_writes(rv: Review, c: dict) -> dict:
     if where is None:
         raise Conflict(f"{c['id']} could not be located exactly; nothing was changed.")
     cur = rv.text(c["file"])
+    r_text = _r_text(rv, c["file"])
     s, e = where
+    rs, re_ = c["r_range"]
+    left = min(NEIGHBOURHOOD, rs, s)
+    right = min(NEIGHBOURHOOD, len(r_text) - re_, len(cur) - e)
+    if r_text[rs - left : rs] != cur[s - left : s] or r_text[re_ : re_ + right] != cur[e : e + right]:
+        raise Conflict(
+            f"The text around {c['id']} has changed since the review, so scrivmark cannot be sure it is "
+            "restoring the right place. Nothing was changed; edit the passage directly instead."
+        )
     return {c["file"]: cur[:s] + c["base"] + cur[e:]}
 
 
@@ -416,10 +426,11 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
         anchor = d["anchor"]
         if wording is not None:
             where = resolve(rv, anchor)
-            if where["state"] != "ok":
-                raise Conflict("The draft's passage has changed; its wording cannot be applied.")
-            s, e = where["range"]
             cur = rv.text(anchor["file"])
+            if where["state"] != "ok" or where.get("edited") or cur[where["range"][0] : where["range"][1]] != anchor["exact"]:
+                raise Conflict("The draft's passage has been edited since it was written, so its wording "
+                               "was not applied. Edit the draft, or drop it.")
+            s, e = where["range"]
             new = cur[:s] + wording + cur[e:]
             writes[anchor["file"]] = new
             anchor = {
@@ -441,13 +452,14 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
 # ---------------------------------------------------------------- direct edits
 
 
-def replace_lines(rv: Review, rel: str, first: int, last: int, new_text: str, expect: str | None = None) -> None:
-    """Replace lines first..last (1-based, inclusive) of a manuscript file."""
+def replace_lines(rv: Review, rel: str, first: int, last: int, new_text: str, file_rev: str | None = None) -> None:
+    """Replace lines first..last (1-based, inclusive) of a manuscript file,
+    if the file is still at `file_rev`."""
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
     if rel not in rv.ms.files:
         raise ScrivError(f"{rel} is not a manuscript file")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+    with transaction(rv.root, file_rev, [rel]) as writes:
         lines = rv.text(rel).splitlines(keepends=True)
         if not (1 <= first <= last <= len(lines)):
             raise ScrivError("Those lines are no longer in the file; reload.")

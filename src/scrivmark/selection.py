@@ -77,10 +77,15 @@ def _find_start(plain: str, sel: str, before: str) -> int | None:
 
 
 def _find_end(plain: str, sel: str, start: int) -> int | None:
+    """The end whose span length best matches the selection; refuse ties."""
     for k in range(min(24, len(sel)), 3, -1):
-        i = plain.find(sel[-k:], start)
-        if i != -1:
-            return i + k
+        ends = [m.start() + k for m in re.finditer(re.escape(sel[-k:]), plain) if m.start() >= start]
+        if not ends:
+            continue
+        ranked = sorted(ends, key=lambda x: abs((x - start) - len(sel)))
+        if len(ranked) > 1 and abs((ranked[0] - start) - len(sel)) == abs((ranked[1] - start) - len(sel)):
+            return None
+        return ranked[0]
     return None
 
 

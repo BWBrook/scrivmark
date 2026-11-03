@@ -157,10 +157,10 @@ function highlight(t) {
     }
   }
   let needle = plainQuote(t.current || t.anchor.exact);
-  let at = needle ? text.indexOf(needle) : -1;
-  if (at < 0 && needle.length > 30) { needle = needle.slice(0, 30); at = text.indexOf(needle); }
+  const nth = (needle, k) => { let i = -1; for (let n = 0; n <= k; n++) { i = text.indexOf(needle, i + 1); if (i < 0) return -1; } return i; };
+  let at = needle ? nth(needle, t.nth || 0) : -1;
+  if (at < 0 && needle.length > 30) { needle = needle.slice(0, 30); at = nth(needle, t.nth || 0); }
   if (at < 0) { block.classList.add("block-hl"); t._mark = block; return; }
-  const start = map[at], end = map[at + needle.length - 1];
   const byNode = new Map();
   for (let k = at; k < at + needle.length; k++) {
     const [node, off] = map[k];
@@ -336,7 +336,7 @@ function currentSelection() {
   const sameBlock = block.contains(range.endContainer);
   return {
     file: block.dataset.file, lines: block.dataset.lines,
-    text: sameBlock ? sel.toString() : "", before: pre.toString().slice(-60), rect: range.getBoundingClientRect(),
+    text: sameBlock ? sel.toString() : "", before: pre.toString().slice(-60), rect: range.getBoundingClientRect(), key: S.key,
   };
 }
 
@@ -357,7 +357,7 @@ async function onSelection() {
   S.sel = s;
   place(tool, s.rect);
   S.selPosted = true;
-  api("/api/selection", { file: s.file, lines: s.lines, text: s.text, before: s.before }).catch(() => {});
+  api("/api/selection", { file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key }).catch(() => {});
 }
 
 tool.addEventListener("mousedown", e => e.preventDefault());
@@ -371,8 +371,8 @@ tool.addEventListener("click", e => {
   const send = async () => {
     if (!ta.value.trim()) return;
     try {
-      if (act === "comment") await api("/api/comment", { file: s.file, lines: s.lines, text: s.text, before: s.before, body: ta.value, rev: S.st.rev });
-      else { await api("/api/ask", { file: s.file, lines: s.lines, text: s.text, before: s.before, question: ta.value }); notice("Queued. Tell your agent: “check my asks”.", 6000); }
+      if (act === "comment") await api("/api/comment", { file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key, body: ta.value, rev: S.st.rev });
+      else { await api("/api/ask", { file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key, question: ta.value }); notice("Queued. Tell your agent: “check my asks”.", 6000); }
       pop.hidden = true;
     } catch (err) { fail(err); }
   };

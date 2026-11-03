@@ -285,7 +285,7 @@ def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_js
         raise ScrivError(f"No such change: {', '.join(unknown)}. `scrivmark changes` lists them.")
     if not ids:
         raise ScrivError("Name the changes, e.g. `scrivmark accept c1 c3`, or use --all.")
-    done = [review.decide(rv, cid, decision, _who(rv), expect) for cid in ids]
+    done = [review.decide(rv, cid, decision, _who(rv), expect if i == 0 else None) for i, cid in enumerate(ids)]
     _emit(done, as_json, "\n".join(f"{c['id']} {decision}" for c in done))
 
 
@@ -357,7 +357,7 @@ def reply(thread_id: str, body: Annotated[str, typer.Option()], expect: Expect =
 def resolve(thread_ids: list[str], expect: Expect = None, as_json: Json = False):
     """Mark threads resolved."""
     rv = review.active(_root())
-    done = [review.set_thread(rv, tid, "resolved", expect) for tid in thread_ids]
+    done = [review.set_thread(rv, tid, "resolved", expect if i == 0 else None) for i, tid in enumerate(thread_ids)]
     _emit(done, as_json, "\n".join(f"{t['id']} resolved" for t in done))
 
 

@@ -93,3 +93,55 @@ def test_return_refuses_drafts_and_stray_files(repo):
     (repo / "scratch.txt").write_text("x")
     with pytest.raises(ScrivError, match="scratch.txt"):
         rounds.return_round(repo, push=False)
+
+
+def test_reject_refuses_when_a_repeated_passage_shifts(repo, monkeypatch):
+    edit(repo, "Abundance was not estimated", "The rate is high.\n\nThe rate is low.\n\nAbundance was not estimated")
+    git(repo, "commit", "-qam", "repeated lines")
+    rounds.start(repo)
+    edit(repo, "The rate is high.", "The rate is low.")
+    info = rounds.return_round(repo, push=False)
+    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
+    rounds.open_round(repo, info["round"])
+    edit(repo, "The rate is low.\n\nThe rate is low.", "The rate is low.")
+    rv = review.active(repo)
+    before = (repo / "paper.md").read_text()
+    try:
+        review.decide(rv, "c1", "rejected", "SS")
+    except Conflict:
+        pass
+    assert (repo / "paper.md").read_text() == before
+
+
+def test_kept_draft_wording_never_overwrites_an_edit(repo):
+    rv = rounds.start(repo)
+    d = review.add_draft(rv, review.anchor_quote(rv, "paper.md", "120 burrows"), "Fewer?", "100 burrows")
+    edit(repo, "120 burrows", "118 burrows")
+    with pytest.raises(Conflict):
+        review.triage(rv, d["id"], True, "BWB")
+    assert "118 burrows" in (repo / "paper.md").read_text()
+    assert review.drafts(rv)
+
+
+def test_structural_whitespace_edit_is_catalogued(repo):
+    rounds.start(repo)
+    edit(repo, "- east and west", "    - east and west")
+    info = rounds.return_round(repo, push=False)
+    assert info["changes"] == 1
+
+
+def test_close_can_be_resumed(repo, monkeypatch):
+    reviewer_pass(repo)
+    info = rounds.return_round(repo, push=False)
+    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
+    rounds.open_round(repo, info["round"])
+    rv = review.active(repo)
+    review.decide(rv, "c1", "accepted", "SS")
+    review.decide(rv, "c2", "accepted", "SS")
+    review.set_thread(rv, rv.rec["threads"][0]["id"], "resolved")
+    real = rounds._merge_closed
+    monkeypatch.setattr(rounds, "_merge_closed", lambda *a: (_ for _ in ()).throw(ScrivError("push failed")))
+    with pytest.raises(ScrivError):
+        rounds.close_round(repo, push=False)
+    monkeypatch.setattr(rounds, "_merge_closed", real)
+    assert rounds.close_round(repo, push=False)["merged_into"] == "main"

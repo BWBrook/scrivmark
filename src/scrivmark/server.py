@@ -21,7 +21,7 @@ from starlette.routing import Route
 from watchfiles import awatch
 
 from . import config, gitutil, record, render, review
-from .blocks import line_of
+from .blocks import guarded_segments, line_of
 from .errors import Conflict, ScrivError, StaleRevision
 from .selection import map_selection
 from .state import atomic_write, local_dir, read_json, revision
@@ -31,8 +31,9 @@ COOKIE = "scrivmark"
 
 
 class Viewer:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, port: int = 0):
         self.root = root
+        self.cookie = f"{COOKIE}-{port}"
         self.token = secrets.token_urlsafe(18)
         self.cache: tuple[str, dict] | None = None
         self.listeners: set[asyncio.Queue] = set()
@@ -65,19 +66,18 @@ class Viewer:
         if self.cache and self.cache[0] == key:
             return self.cache[1]
         mode = self.mode(rv)
-        base, located = None, None
+        base, pending = None, None
         if rv and rv.status in ("open", "returned"):
             base = rv.rec["round"]["base"]
         if rv and rv.status == "returned":
-            located = {}
+            pending = {}
             for c in rv.rec["changes"]:
                 if c["type"] != "file" and review.change_status(rv, c) == "pending":
                     loc = review.locate(rv, c)
                     if loc:
-                        located.setdefault(c["file"], []).append((loc, c["id"]))
-        md = render.manuscript_markdown(self.root, ms, base, located)
+                        pending.setdefault(c["file"], []).append((c["id"], loc[0], loc[1], c["type"], c["base"]))
         try:
-            html, warnings = render.to_html(self.root, ms, md)
+            html, warnings = render.render(self.root, ms, base, pending)
         except RuntimeError as e:
             html, warnings = f"<pre class='scrv-error'>{_esc(str(e))}</pre>", ""
         data = {
@@ -105,6 +105,9 @@ class Viewer:
             s, e = where["range"]
             out["line"] = [line_of(text, s), line_of(text, max(s, e - 1))]
             out["current"] = text[s:e]
+            seg = next((g for g in guarded_segments(text) if g.a <= s < g.z), None)
+            start = seg.b0 if seg else 0
+            out["nth"] = text[start:s].count(text[s:e]) if e > s else 0
         else:
             out["line"] = None
         return out
@@ -117,8 +120,14 @@ class Viewer:
             raise ScrivError("No review round is checked out. Run `scrivmark start` or `scrivmark open <round>`.")
         return rv
 
+    def check_render(self, body: dict) -> None:
+        if body.get("key") and body["key"] != self.state()["key"]:
+            raise StaleRevision("The page was out of date when you selected that; it has refreshed, please select again.")
+
     def anchor_from(self, rv: review.Review, body: dict) -> dict:
         rel = body["file"]
+        if rel not in rv.ms.files:
+            raise ScrivError(f"{rel} is not a manuscript file")
         first, last = (int(x) for x in body["lines"].split("-"))
         text = rv.text(rel)
         if text is None:
@@ -155,7 +164,7 @@ def _esc(s: str) -> str:
 
 def build_app(viewer: Viewer) -> Starlette:
     def authorised(request: Request) -> bool:
-        return request.cookies.get(COOKIE) == viewer.token or request.headers.get("x-scrivmark") == viewer.token
+        return request.cookies.get(viewer.cookie) == viewer.token or request.headers.get("x-scrivmark") == viewer.token
 
     def guard(handler, mutate: bool = False):
         async def inner(request: Request):
@@ -183,7 +192,7 @@ def build_app(viewer: Viewer) -> Starlette:
         if request.query_params.get("t") != viewer.token and not authorised(request):
             return HTMLResponse("<p>Open the address that <code>scrivmark serve</code> printed.</p>", status_code=403)
         resp = HTMLResponse((STATIC / "index.html").read_text())
-        resp.set_cookie(COOKIE, viewer.token, httponly=True, samesite="strict")
+        resp.set_cookie(viewer.cookie, viewer.token, httponly=True, samesite="strict")
         return resp
 
     async def static(request: Request):
@@ -230,6 +239,7 @@ def build_app(viewer: Viewer) -> Starlette:
     async def comment(request: Request):
         b = await body_of(request)
         rv = viewer.need()
+        viewer.check_render(b)
         anchor = viewer.anchor_from(rv, b)
         t = review.comment(rv, anchor, b["body"], viewer.who(rv), b.get("rev"))
         return JSONResponse(t)
@@ -271,9 +281,11 @@ def build_app(viewer: Viewer) -> Starlette:
     async def source_put(request: Request):
         b = await body_of(request)
         rv = viewer.need()
-        if revision(viewer.root, [b["file"]]) != b["file_rev"]:
-            raise StaleRevision("This file changed while you were editing; your text is kept, reload to retry.")
-        review.replace_lines(rv, b["file"], int(b["first"]), int(b["last"]), b["text"])
+        try:
+            review.replace_lines(rv, b["file"], int(b["first"]), int(b["last"]), b["text"], b["file_rev"])
+        except StaleRevision:
+            raise StaleRevision("This file changed while you were editing. Your text is still in the box; "
+                                "copy it, cancel, and edit again.") from None
         return JSONResponse({"ok": True})
 
     async def selection(request: Request):
@@ -283,6 +295,7 @@ def build_app(viewer: Viewer) -> Starlette:
         if not b.get("text"):
             atomic_write(sel_path, None)
             return JSONResponse({"ok": True})
+        viewer.check_render(b)
         a = viewer.anchor_from(rv, b)
         sel = {"file": a["file"], "lines": [int(x) for x in b["lines"].split("-")], "range": a["range"],
                "exact": a["exact"], "rendered": b["text"], "file_rev": revision(viewer.root, [a["file"]]),
@@ -293,6 +306,7 @@ def build_app(viewer: Viewer) -> Starlette:
     async def ask(request: Request):
         b = await body_of(request)
         rv = viewer.need()
+        viewer.check_render(b)
         a = viewer.anchor_from(rv, b)
         p = local_dir(viewer.root, rv.id) / "asks.json"
         items = read_json(p, [])
@@ -336,8 +350,8 @@ def _free_port() -> int:
 
 def run(root: Path, port: int = 0, open_browser: bool = False) -> None:
     config.load(root)
-    viewer = Viewer(root)
     port = port or _free_port()
+    viewer = Viewer(root, port)
     url = f"http://127.0.0.1:{port}/?t={viewer.token}"
     print(f"scrivmark viewer: {url}\nOpen it in your browser or the app's browser pane. Ctrl-C stops it.", flush=True)
     if open_browser:

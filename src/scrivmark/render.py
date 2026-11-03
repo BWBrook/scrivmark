@@ -8,6 +8,7 @@ that fails, the old block is shown struck through above the new one.
 """
 
 import json
+import secrets
 import subprocess
 from importlib.resources import files
 from pathlib import Path
@@ -27,27 +28,41 @@ def _attrs(**kv) -> str:
     return " ".join(f'{k}="{v}"' for k, v in kv.items() if v not in (None, ""))
 
 
-def _overlaps(n: tuple[int, int], loc: tuple[int, int]) -> bool:
-    (n0, n1), (l0, l1) = n, loc
-    if n0 == n1 or l0 == l1:
-        return l0 <= n1 and n0 <= l1
-    return n0 < l1 and l0 < n1
-
-
 class _Builder:
-    def __init__(self, fence: str, rel: str, cur: str):
-        self.fence, self.rel, self.cur = fence, rel, cur
+    def __init__(self, fence: str, rel: str, cur: str, nonce: str):
+        self.fence, self.rel, self.cur, self.nonce = fence, rel, cur, nonce
         self.parts: list[str] = []
         self.checks: list[tuple[int, str, str, str, str]] = []
 
     def wrap(self, body: str, cls: str, s: int, e: int, change: str | None = None) -> None:
         lines = f"{line_of(self.cur, s)}-{line_of(self.cur, max(s, e - 1))}"
         classes = " ".join(f".{c}" for c in cls.split())
-        self.parts.append(f"{self.fence} {{{classes} {_attrs(file=self.rel, lines=lines, c=change)}}}\n{body}\n{self.fence}\n\n")
+        attrs = _attrs(file=self.rel, lines=lines, c=change, n=self.nonce)
+        self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{body}\n{self.fence}\n\n")
 
     def old(self, body: str, change: str | None) -> None:
         if body.strip():
-            self.parts.append(f"{self.fence} {{.scrv-old {_attrs(file=self.rel, c=change)}}}\n{body}\n{self.fence}\n\n")
+            attrs = _attrs(file=self.rel, c=change, n=self.nonce)
+            self.parts.append(f"{self.fence} {{.scrv-old {attrs}}}\n{body}\n{self.fence}\n\n")
+
+    def yaml(self, seg, first_file: bool) -> None:
+        if first_file:
+            self.parts.append(self.cur[seg.b0 : seg.b1] + "\n\n")
+
+    def inline(self, seg, marks: list[tuple[Unit, str | None]]) -> None:
+        spliced, reverted = _splice(self.cur, seg.b0, seg.b1, marks, self.nonce)
+        cids = " ".join(sorted({c for _, c in marks if c}))
+        self.checks.append((len(self.parts), spliced, self.cur[seg.b0 : seg.b1], reverted, cids))
+        self.wrap(spliced, "scrv-b", seg.b0, seg.b1)
+
+    def finish(self) -> list[str]:
+        for i in sorted(_verify(self.checks, self.fence)):
+            pos, _, current, reverted, cids = self.checks[i]
+            head = self.parts[pos].split("\n", 1)[0].replace(".scrv-b", ".scrv-b .scrv-ins-block", 1)
+            old = _attrs(file=self.rel, c=cids, n=self.nonce)
+            self.parts[pos] = (f"{self.fence} {{.scrv-old {old}}}\n{reverted}\n{self.fence}\n\n"
+                               f"{head}\n{current}\n{self.fence}\n\n")
+        return self.parts
 
 
 def _edges(text: str) -> tuple[str, str, str]:
@@ -58,13 +73,13 @@ def _edges(text: str) -> tuple[str, str, str]:
     return text[:i], core, text[i + len(core) :]
 
 
-def _splice(cur: str, b0: int, b1: int, marked: list[tuple[Unit, str | None]]) -> tuple[str, str]:
+def _splice(cur: str, b0: int, b1: int, marked: list[tuple[Unit, str | None]], nonce: str) -> tuple[str, str]:
     spliced, reverted, pos = [], [], b0
     for u, cid in sorted(marked, key=lambda m: m[0].new):
         n0, n1 = u.new
         spliced.append(cur[pos:n0])
         reverted.append(cur[pos:n0])
-        c = f' c="{cid}"' if cid else ""
+        c = (f' c="{cid}"' if cid else "") + f' n="{nonce}"'
         o, n = _edges(u.old_text), _edges(u.new_text)
         spliced.append(o[0] or n[0])
         if o[1]:
@@ -132,70 +147,93 @@ def _verify(checks: list[tuple[int, str, str, str, str]], fence: str) -> set[int
     return bad
 
 
-def manuscript_markdown(root: Path, ms: Manuscript, base: str | None = None,
-                        located: dict[str, list[tuple[tuple[int, int], str]]] | None = None) -> str:
-    """Build the wrapped Markdown. With `base`, show the redline from that commit;
-    `located` restricts marks to those changes (returned rounds)."""
+Pending = list[tuple[str, int, int, str, str]]  # (change id, start, end, type, base text)
+
+
+def _reviewer_view(b: _Builder, old: str | None, first: bool) -> None:
+    """Open round: everything that differs from base is the reviewer's."""
+    cur = b.cur
+    ops = align(old, cur) if old is not None and old != cur else [Op("equal", [], guarded_segments(cur), [])]
+    for op in ops:
+        if op.tag == "equal" or (op.tag == "pair" and not op.units):
+            for seg in op.new:
+                b.yaml(seg, first) if seg.kind == "yaml" else b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
+        elif op.tag == "pair":
+            b.inline(op.new[0], [(u, None) for u in op.units])
+        else:
+            b.old("\n\n".join(old[s.b0 : s.b1] for s in op.old if s.kind != "yaml"), None)
+            for seg in op.new:
+                b.yaml(seg, first) if seg.kind == "yaml" else b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block", seg.b0, seg.b1)
+
+
+def _author_view(b: _Builder, pending: Pending, first: bool) -> None:
+    """Returned round: show only the frozen catalogue's pending changes, each
+    at its projected place in the current text."""
+    cur = b.cur
+    blocks = [p for p in pending if p[3] == "block"]
+    shown: set[str] = set()
+
+    def old_once(p) -> None:
+        if p[0] not in shown:
+            shown.add(p[0])
+            b.old(p[4].strip("\n"), p[0])
+
+    for seg in guarded_segments(cur):
+        for p in blocks:
+            if p[1] == p[2] and seg.a <= p[1] <= seg.b0:
+                old_once(p)
+        if seg.kind == "yaml":
+            b.yaml(seg, first)
+            continue
+        hit = next((p for p in blocks if p[1] < p[2] and p[1] <= seg.b0 and seg.b1 <= p[2]), None)
+        if hit:
+            old_once(hit)
+            b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block", seg.b0, seg.b1, hit[0])
+            continue
+        inside = [p for p in pending if p[3] == "text" and seg.b0 <= p[1] and p[2] <= seg.b1]
+        if not inside:
+            b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
+            continue
+        b.inline(seg, [(Unit("text", (0, 0), (s, e), base, cur[s:e]), cid) for cid, s, e, _, base in inside])
+    for p in blocks:
+        if p[1] == p[2]:
+            old_once(p)
+
+
+def manuscript_markdown(root: Path, ms: Manuscript, nonce: str, base: str | None = None,
+                        pending: dict[str, Pending] | None = None) -> str:
+    """The wrapped Markdown for the whole manuscript. With `base` and no
+    `pending`, the redline is everything changed since `base` (reviewer view);
+    with `pending`, it is those frozen changes only (author view)."""
     out = []
     for idx, rel in enumerate(ms.files):
-        cur = (root / rel).read_text()
+        path = root / rel
+        if not path.exists():
+            out.append(f"::: {{.scrv-missing}}\n*{rel} has been deleted.*\n:::\n\n")
+            continue
+        cur = path.read_text()
         old = (gitutil.show(root, base, rel) or "") if base else None
-        fence = fence_for(cur + (old or ""))
-        b = _Builder(fence, rel, cur)
-        ops = align(old, cur) if old is not None and old != cur else [Op("equal", [], guarded_segments(cur), [])]
-        for op in ops:
-            if op.tag == "equal":
-                for seg in op.new:
-                    if seg.kind == "yaml":
-                        if idx == 0:
-                            b.parts.append(cur[seg.b0 : seg.b1] + "\n\n")
-                        continue
-                    b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
-                continue
-            marks = []
-            for u in op.units:
-                cid = None
-                if located is not None:
-                    hit = next((c for loc, c in located.get(rel, []) if _overlaps(u.new, loc)), None)
-                    if hit is None:
-                        continue
-                    cid = hit
-                marks.append((u, cid))
-            if op.tag == "pair":
-                seg = op.new[0]
-                if not marks:
-                    b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
-                    continue
-                spliced, reverted = _splice(cur, seg.b0, seg.b1, marks)
-                cids = " ".join(sorted({c for _, c in marks if c}))
-                b.checks.append((len(b.parts), spliced, cur[seg.b0 : seg.b1], reverted, cids))
-                b.wrap(spliced, "scrv-b", seg.b0, seg.b1)
-                continue
-            cid = marks[0][1] if marks else None
-            if marks:
-                b.old("\n\n".join(old[s.b0 : s.b1] for s in op.old if s.kind != "yaml"), cid)
-            for seg in op.new:
-                if seg.kind == "yaml":
-                    if idx == 0:
-                        b.parts.append(cur[seg.b0 : seg.b1] + "\n\n")
-                    continue
-                b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block" if marks else "scrv-b", seg.b0, seg.b1, cid)
-        for i in sorted(_verify(b.checks, fence)):
-            pos, _, current, reverted, cids = b.checks[i]
-            seg_lines = b.parts[pos].split("\n", 1)[0]
-            b.parts[pos] = (f"{fence} {{.scrv-old {_attrs(file=rel, c=cids)}}}\n{reverted}\n{fence}\n\n"
-                            + seg_lines.replace(".scrv-b", ".scrv-b .scrv-ins-block", 1)
-                            + f"\n{current}\n{fence}\n\n")
-        out.extend(b.parts)
+        b = _Builder(fence_for(cur + (old or "")), rel, cur, nonce)
+        if pending is not None:
+            _author_view(b, pending.get(rel, []), idx == 0)
+        else:
+            _reviewer_view(b, old, idx == 0)
+        out.extend(b.finish())
     return "".join(out)
 
 
-def to_html(root: Path, ms: Manuscript, markdown: str) -> tuple[str, str]:
+def render(root: Path, ms: Manuscript, base: str | None = None,
+           pending: dict[str, Pending] | None = None) -> tuple[str, str]:
+    nonce = secrets.token_hex(8)
+    return to_html(root, ms, manuscript_markdown(root, ms, nonce, base, pending), nonce)
+
+
+def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str, str]:
     cmd = [
         "pandoc", "-f", PANDOC_FROM, "-t", "html5", "--mathml", "--wrap=none", "--standalone",
         "--template", str(ASSETS / "template.html"), "--lua-filter", str(ASSETS / "scrivmark.lua"),
         "--citeproc", "--metadata", "link-citations=true", "--metadata", "pagetitle=scrivmark",
-        "--metadata", "reference-section-title=References",
+        "--metadata", "reference-section-title=References", "--metadata", f"scrv-nonce={nonce}",
     ]
     for bib in ms.bibliography:
         cmd += ["--bibliography", str(root / bib)]

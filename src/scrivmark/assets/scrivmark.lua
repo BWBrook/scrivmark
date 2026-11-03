@@ -6,6 +6,9 @@
 --  * neutralises link and image targets with unsafe schemes.
 
 local stringify = pandoc.utils.stringify
+local nonce = ""
+local TRUSTED_KEYS = { file = true, lines = true, c = true }
+local SAFE_KEYS = { width = true, height = true, title = true, lang = true, dir = true }
 local labels = {}
 local counts = { fig = 0, tbl = 0, eq = 0 }
 local names = { fig = "Figure", tbl = "Table", eq = "Equation", sec = "Section" }
@@ -42,6 +45,30 @@ end
 local function dirname(f)
   return f and f:match("^(.*)/[^/]*$") or ""
 end
+
+-- pass 0: only scrivmark's own wrappers (carrying this render's nonce) may
+-- claim source locations or scrv- classes; manuscript attributes are reduced
+-- to a safe allowlist, so nothing in the manuscript can script the viewer.
+
+local function clean(el)
+  if not el.attr then return nil end
+  local trusted = el.attributes["n"] == nonce and nonce ~= ""
+  local classes = pandoc.List({})
+  for _, c in ipairs(el.classes) do
+    if trusted or not c:match("^scrv%-") then classes:insert(c) end
+  end
+  local kept = {}
+  for k, v in pairs(el.attributes) do
+    if (trusted and TRUSTED_KEYS[k]) or SAFE_KEYS[k] then kept[k] = v end
+  end
+  el.attr = pandoc.Attr(el.identifier, classes, kept)
+  return el
+end
+
+local sanitize = {
+  Div = clean, Span = clean, Header = clean, CodeBlock = clean, Code = clean,
+  Image = clean, Link = clean, Figure = clean, Table = clean,
+}
 
 -- pass 1: labels ---------------------------------------------------------
 
@@ -176,7 +203,8 @@ local function inline_filter(dir, old)
       return img
     end,
     Link = function(l)
-      l.target = safe_target(l.target)
+      if l.target:match("^#") then return l end
+      l.target = rebase(l.target, dir)
       return l
     end,
   }
@@ -232,6 +260,8 @@ local function render_deleted_cites(doc)
 end
 
 function Pandoc(doc)
+  nonce = doc.meta["scrv-nonce"] and stringify(doc.meta["scrv-nonce"]) or ""
+  doc.blocks = doc.blocks:walk(sanitize)
   doc.blocks = label_pass(doc.blocks, false)
   doc.blocks = refs_pass(doc.blocks, "", false)
   return render_deleted_cites(doc)
