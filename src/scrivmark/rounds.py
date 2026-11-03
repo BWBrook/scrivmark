@@ -38,6 +38,23 @@ def _commit(root: Path, message: str, paths: list[str] | None = None) -> bool:
     return True
 
 
+def _commit_work(root: Path, message: str) -> bool:
+    """Commit changes to tracked files; refuse if untracked files are lying
+    around, so nothing unintended joins the review."""
+    stray = [p for p in gitutil.git(root, "ls-files", "--others", "--exclude-standard").splitlines() if not is_managed(p)]
+    if stray:
+        listing = "\n  ".join(stray[:10])
+        raise ScrivError(
+            "These new files are not part of the repository yet:\n  " + listing +
+            "\nRun `git add <file>` for any that belong to the manuscript, and delete or ignore the rest."
+        )
+    gitutil.git(root, "add", "-u")
+    if gitutil.ok(root, "diff", "--cached", "--quiet"):
+        return False
+    gitutil.git(root, "commit", "-q", "-m", message)
+    return True
+
+
 def _gh() -> bool:
     return shutil.which("gh") is not None
 
@@ -101,7 +118,7 @@ def return_round(root: Path, push: bool = True) -> dict:
     left = drafts(rv)
     if left:
         raise ScrivError(f"{len(left)} draft comment(s) still need keeping or dropping before you return the round.")
-    _commit(root, f"scrivmark: reviewer edits for {rv.id}")
+    _commit_work(root, f"scrivmark: reviewer edits for {rv.id}")
     returned = gitutil.rev(root, "HEAD")
     rv.rec["changes"] = catalogue(root, rv.ms, rv.rec["round"]["base"], returned)
     orphans = rebase_anchors(rv, returned)
@@ -208,7 +225,7 @@ def close_round(root: Path, force: bool = False, push: bool = True) -> dict:
     rv = active(root)
     if rv.status != "returned":
         raise ScrivError(f"Round {rv.id} is {rv.status}; only a returned round can be closed.")
-    _commit(root, f"scrivmark: author responses for {rv.id}")
+    _commit_work(root, f"scrivmark: author responses for {rv.id}")
     integration = integrate(rv)
     cs = list_changes(rv)
     pending = [c["id"] for c in cs if c["state"] == "pending"]

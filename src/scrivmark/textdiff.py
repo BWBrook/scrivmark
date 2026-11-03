@@ -78,7 +78,8 @@ def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment) -> list[Unit]
             o0 = o1 = ot[i1].start
         if j2 == j1 and j1 < len(nt):
             n0 = n1 = nt[j1].start
-        units.append(Unit("text", (o0, o1), (n0, n1), old[o0:o1], new[n0:n1]))
+        if old[o0:o1].strip() or new[n0:n1].strip():
+            units.append(Unit("text", (o0, o1), (n0, n1), old[o0:o1], new[n0:n1]))
     return units
 
 
@@ -86,33 +87,48 @@ def _similar(a: str, b: str) -> bool:
     return SequenceMatcher(None, a, b, autojunk=False).quick_ratio() > 0.5
 
 
-def diff_units(old: str, new: str) -> list[Unit]:
-    if old == new:
-        return []
+@dataclass
+class Op:
+    tag: str  # equal | pair | block
+    old: list[Segment]
+    new: list[Segment]
+    units: list[Unit]
+
+
+def align(old: str, new: str) -> list[Op]:
+    """Align the blocks of two texts. Paired prose blocks carry word-level
+    units; everything else that differs is one block unit."""
     os_, ns = guarded_segments(old), guarded_segments(new)
     okeys = [old[s.b0 : s.b1] for s in os_]
     nkeys = [new[s.b0 : s.b1] for s in ns]
     sm = SequenceMatcher(None, okeys, nkeys, autojunk=False)
-    units: list[Unit] = []
+    ops: list[Op] = []
 
     def block(i1: int, i2: int, j1: int, j2: int) -> None:
         o = (os_[i1].a, os_[i2 - 1].z) if i2 > i1 else (_point(os_, i1, len(old)),) * 2
         n = (ns[j1].a, ns[j2 - 1].z) if j2 > j1 else (_point(ns, j1, len(new)),) * 2
-        units.append(Unit("block", o, n, old[o[0] : o[1]], new[n[0] : n[1]]))
+        unit = Unit("block", o, n, old[o[0] : o[1]], new[n[0] : n[1]])
+        ops.append(Op("block", os_[i1:i2], ns[j1:j2], [unit]))
 
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
-            continue
-        if tag == "replace" and i2 - i1 == j2 - j1:
+            ops.append(Op("equal", os_[i1:i2], ns[j1:j2], []))
+        elif tag == "replace" and i2 - i1 == j2 - j1:
             for oi, nj in zip(range(i1, i2), range(j1, j2)):
                 oseg, nseg = os_[oi], ns[nj]
                 if oseg.kind in TEXT_KINDS and nseg.kind in TEXT_KINDS and _similar(okeys[oi], nkeys[nj]):
-                    units.extend(_token_hunks(old, new, oseg, nseg))
+                    ops.append(Op("pair", [oseg], [nseg], _token_hunks(old, new, oseg, nseg)))
                 else:
                     block(oi, oi + 1, nj, nj + 1)
         else:
             block(i1, i2, j1, j2)
-    return units
+    return ops
+
+
+def diff_units(old: str, new: str) -> list[Unit]:
+    if old == new:
+        return []
+    return [u for op in align(old, new) for u in op.units]
 
 
 def _point(segs: list[Segment], i: int, end: int) -> int:
