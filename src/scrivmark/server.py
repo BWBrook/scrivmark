@@ -389,7 +389,15 @@ DEFAULT_PORT = 8765
 
 
 def _port_free(port: int) -> bool:
+    """Free means nothing is listening and we could bind it. SO_REUSEADDR, as
+    uvicorn sets, lets a port still closing a stopped viewer's connections count
+    as free."""
+    with socket.socket() as probe:
+        probe.settimeout(0.3)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False
     with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
             return True
@@ -398,10 +406,12 @@ def _port_free(port: int) -> bool:
 
 
 def choose_port(asked: int, configured: int | None) -> int:
-    """An explicit --port, else scrivmark.toml's, else 8765. Only the default
-    moves along to the next free port; an asked-for port that is busy is an error."""
-    if asked or configured:
-        port = asked or configured
+    """--port, else $PORT (set by launchers such as the desktop apps'), else
+    scrivmark.toml's, else 8765. Only the default moves along to the next free
+    port; a named port that is busy is an error."""
+    env = os.environ.get("PORT", "")
+    port = asked or (int(env) if env.isdigit() else 0) or configured
+    if port:
         if not _port_free(port):
             raise ScrivError(f"Port {port} is in use. Is a viewer already running? `scrivmark url` shows it.")
         return port

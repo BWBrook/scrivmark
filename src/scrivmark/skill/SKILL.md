@@ -20,8 +20,11 @@ Always use `--json` when you need to read output. Never edit
 ## The viewer
 
 Start it in the background with `scrivmark serve`. It listens on port 8765
-(or `[viewer] port` in `scrivmark.toml`), keeps the same address across
-restarts, and `http://localhost:8765` opens it directly on this machine.
+(or `--port`, then `$PORT` from a launcher, then `[viewer] port` in
+`scrivmark.toml`), keeps the same address across restarts, and
+`http://localhost:8765` opens it directly on this machine. For the desktop
+apps' browser pane, a `.claude/launch.json` entry running `scrivmark serve`
+with `"port": 8765` and `"autoPort": false` is all it needs.
 `scrivmark url` prints the full address of the running viewer. After a CLI
 change, the page updates within about a second; wait that long before reading
 it back.

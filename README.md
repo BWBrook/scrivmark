@@ -62,9 +62,22 @@ scrivmark close         # merge it, keeping the record in reviews/
 command. Authors can ask for a review with `scrivmark request`.
 
 The viewer listens on port 8765 (set another with `[viewer] port = 8800` in
-`scrivmark.toml`) and keeps the same address across restarts, so a launcher
-such as the Claude desktop app's browser pane can simply run `scrivmark serve`
-and open `http://localhost:8765`. `scrivmark url` prints the full address.
+`scrivmark.toml`, or `--port`) and keeps the same address across restarts. A
+launcher that sets `$PORT`, such as the Claude desktop app's browser pane, is
+obeyed. A minimal `.claude/launch.json`:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "scrivmark", "runtimeExecutable": "scrivmark",
+      "runtimeArgs": ["serve"], "port": 8765, "autoPort": false }
+  ]
+}
+```
+
+`"autoPort": false` makes a busy port fail visibly instead of moving.
+`scrivmark url` prints the full address.
 
 ## How it works
 

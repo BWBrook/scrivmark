@@ -500,7 +500,7 @@ def url(as_json: Json = False):
 
 
 @app.command()
-def serve(port: Annotated[int, typer.Option(help="Default: scrivmark.toml's [viewer] port, else 8765 or the next free one.")] = 0,
+def serve(port: Annotated[int, typer.Option(help="Default: $PORT, else scrivmark.toml's [viewer] port, else 8765 or the next free one.")] = 0,
           open_browser: Annotated[bool, typer.Option("--browser/--no-browser", help="Open a browser too.")] = False):
     """Run the local viewer and print its address."""
     from .server import run

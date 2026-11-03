@@ -74,3 +74,34 @@ def test_viewer_code_survives_restart(repo):
     first = Viewer(repo, 8765)
     viewer_file(repo).write_text(json.dumps({"token": first.token, "port": 8765}))
     assert Viewer(repo, 8765).token == first.token
+
+
+def test_port_closing_a_stopped_viewers_connection_counts_as_free():
+    import socket
+
+    from scrivmark.server import _port_free
+
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn's listener does
+    server.bind(("127.0.0.1", 0))
+    port = server.getsockname()[1]
+    server.listen()
+    client = socket.create_connection(("127.0.0.1", port))
+    conn, _ = server.accept()
+    assert not _port_free(port)
+    conn.close()
+    server.close()
+    assert _port_free(port)
+    client.close()
+
+
+def test_launcher_port_comes_after_the_flag_and_before_the_config(monkeypatch):
+    from scrivmark import server
+
+    monkeypatch.setattr(server, "_port_free", lambda port: True)
+    monkeypatch.setenv("PORT", "9001")
+    assert server.choose_port(9100, 9200) == 9100
+    assert server.choose_port(0, 9200) == 9001
+    monkeypatch.delenv("PORT")
+    assert server.choose_port(0, 9200) == 9200
+    assert server.choose_port(0, None) == 8765
