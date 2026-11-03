@@ -1,0 +1,150 @@
+import json
+import secrets
+from datetime import datetime
+from pathlib import Path
+
+import jsonschema
+
+from .errors import ScrivError
+
+REVIEWS = "reviews"
+
+_person = {
+    "type": "object",
+    "required": ["name", "initials"],
+    "properties": {"name": {"type": "string"}, "initials": {"type": "string"}},
+}
+_range = {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}
+
+SCHEMA = {
+    "type": "object",
+    "required": ["scrivmark", "round", "changes", "threads"],
+    "properties": {
+        "scrivmark": {"const": 1},
+        "round": {
+            "type": "object",
+            "required": ["id", "reviewer", "author_branch", "base", "status", "statement"],
+            "properties": {
+                "id": {"type": "string"},
+                "reviewer": _person,
+                "author": {"anyOf": [_person, {"type": "null"}]},
+                "author_branch": {"type": "string"},
+                "base": {"type": "string"},
+                "returned": {"type": ["string", "null"]},
+                "integrated": {"type": ["string", "null"]},
+                "closed": {"type": ["string", "null"]},
+                "status": {"enum": ["open", "returned", "closed"]},
+                "statement": {"type": "string"},
+                "forced": {"type": "boolean"},
+            },
+        },
+        "changes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "type", "file", "base", "reviewer", "decision"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "type": {"enum": ["text", "block", "file"]},
+                    "file": {"type": "string"},
+                    "old_file": {"type": ["string", "null"]},
+                    "status": {"type": "string"},
+                    "base": {"type": "string"},
+                    "reviewer": {"type": "string"},
+                    "r_range": {"anyOf": [_range, {"type": "null"}]},
+                    "decision": {"enum": [None, "accepted", "rejected", "superseded"]},
+                    "by": {"type": ["string", "null"]},
+                    "at": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "threads": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "status", "anchor", "messages"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "status": {"enum": ["open", "resolved"]},
+                    "anchor": {
+                        "type": "object",
+                        "required": ["file", "rev", "range", "exact", "prefix", "suffix"],
+                        "properties": {
+                            "file": {"type": "string"},
+                            "rev": {"type": "string"},
+                            "range": _range,
+                            "exact": {"type": "string"},
+                            "prefix": {"type": "string"},
+                            "suffix": {"type": "string"},
+                        },
+                    },
+                    "messages": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "required": ["id", "by", "at", "body"],
+                            "properties": {
+                                "id": {"type": "string"},
+                                "by": {"type": "string"},
+                                "at": {"type": "string"},
+                                "body": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}-{secrets.token_hex(4)}"
+
+
+def path(root: Path, round_id: str) -> Path:
+    return root / REVIEWS / f"{round_id}.json"
+
+
+def validate(rec: dict) -> dict:
+    try:
+        jsonschema.validate(rec, SCHEMA)
+    except jsonschema.ValidationError as e:
+        raise ScrivError(f"Review record is invalid: {e.message} at {list(e.absolute_path)}") from e
+    return rec
+
+
+def load(root: Path, round_id: str) -> dict:
+    p = path(root, round_id)
+    if not p.exists():
+        raise ScrivError(f"No review record {p.relative_to(root)}")
+    return validate(json.loads(p.read_text()))
+
+
+def dumps(rec: dict) -> str:
+    return json.dumps(validate(rec), indent=2, ensure_ascii=False) + "\n"
+
+
+def blank(round_id: str, reviewer: dict, author_branch: str, base: str, statement: str) -> dict:
+    return {
+        "scrivmark": 1,
+        "round": {
+            "id": round_id,
+            "reviewer": reviewer,
+            "author": None,
+            "author_branch": author_branch,
+            "base": base,
+            "returned": None,
+            "integrated": None,
+            "closed": None,
+            "status": "open",
+            "statement": statement,
+        },
+        "changes": [],
+        "threads": [],
+    }

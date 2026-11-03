@@ -1,0 +1,4 @@
+[manuscript]
+# Source files in reading order.
+files = ["paper.md"]
+bibliography = ["refs.bib"]
