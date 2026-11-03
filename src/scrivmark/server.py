@@ -7,6 +7,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import mimetypes
+import os
 import secrets
 import socket
 import webbrowser
@@ -35,8 +36,10 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 class Viewer:
     def __init__(self, root: Path, port: int = 0):
         self.root = root
+        self.port = port
         self.cookie = f"{COOKIE}-{port}"
-        self.token = secrets.token_urlsafe(18)
+        saved = read_json(viewer_file(root), {})
+        self.token = saved.get("token") or secrets.token_urlsafe(18)
         self.cache: tuple[str, dict] | None = None
         self.listeners: set[asyncio.Queue] = set()
 
@@ -167,9 +170,27 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def viewer_file(root: Path) -> Path:
+    return local_dir(root) / "viewer.json"
+
+
 def build_app(viewer: Viewer) -> Starlette:
+    def local_host(request: Request) -> bool:
+        """Refuse requests addressed to any other host name, so a web page that
+        rebinds its own domain to 127.0.0.1 cannot reach the viewer."""
+        host = request.headers.get("host", "")
+        return host.rsplit(":", 1)[0] in ("127.0.0.1", "localhost", "[::1]")
+
     def authorised(request: Request) -> bool:
+        if not local_host(request):
+            return False
         return request.cookies.get(viewer.cookie) == viewer.token or request.headers.get("x-scrivmark") == viewer.token
+
+    def local_navigation(request: Request) -> bool:
+        """A page load typed, bookmarked or opened by an app on this machine,
+        rather than one triggered by another website. Browsers mark the latter
+        with Sec-Fetch-Site; the frame-ancestors policy stops it being framed."""
+        return local_host(request) and request.headers.get("sec-fetch-site", "none") in ("none", "same-origin")
 
     def guard(handler, mutate: bool = False):
         async def inner(request: Request):
@@ -194,8 +215,10 @@ def build_app(viewer: Viewer) -> Starlette:
         return inner
 
     async def index(request: Request):
-        if request.query_params.get("t") != viewer.token and not authorised(request):
-            return HTMLResponse("<p>Open the address that <code>scrivmark serve</code> printed.</p>", status_code=403)
+        if not local_host(request):
+            return HTMLResponse("<p>scrivmark answers only on 127.0.0.1 or localhost.</p>", status_code=403)
+        if request.query_params.get("t") != viewer.token and not authorised(request) and not local_navigation(request):
+            return HTMLResponse("<p>Open the address that <code>scrivmark url</code> prints.</p>", status_code=403)
         resp = HTMLResponse((STATIC / "index.html").read_text(), headers={"Content-Security-Policy": CSP})
         resp.set_cookie(viewer.cookie, viewer.token, httponly=True, samesite="strict")
         return resp
@@ -362,18 +385,52 @@ def build_app(viewer: Viewer) -> Starlette:
     return Starlette(routes=routes, lifespan=lifespan)
 
 
-def _free_port() -> int:
+DEFAULT_PORT = 8765
+
+
+def _port_free(port: int) -> bool:
     with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def choose_port(asked: int, configured: int | None) -> int:
+    """An explicit --port, else scrivmark.toml's, else 8765. Only the default
+    moves along to the next free port; an asked-for port that is busy is an error."""
+    if asked or configured:
+        port = asked or configured
+        if not _port_free(port):
+            raise ScrivError(f"Port {port} is in use. Is a viewer already running? `scrivmark url` shows it.")
+        return port
+    for port in range(DEFAULT_PORT, DEFAULT_PORT + 40):
+        if _port_free(port):
+            return port
+    raise ScrivError("No free port between 8765 and 8804; pass --port.")
 
 
 def run(root: Path, port: int = 0, open_browser: bool = False) -> None:
-    config.load(root)
-    port = port or _free_port()
+    ms = config.load(root)
+    port = choose_port(port, ms.viewer_port)
     viewer = Viewer(root, port)
     url = f"http://127.0.0.1:{port}/?t={viewer.token}"
-    print(f"scrivmark viewer: {url}\nOpen it in your browser or the app's browser pane. Ctrl-C stops it.", flush=True)
+    atomic_write(viewer_file(root), json.dumps({"token": viewer.token, "port": port, "url": url, "pid": os.getpid()}))
+    print(f"scrivmark viewer: {url}\n(on this machine, http://localhost:{port} also works)\n"
+          "Open it in your browser or the app's browser pane. Ctrl-C stops it.", flush=True)
     if open_browser:
         webbrowser.open(url)
     uvicorn.run(build_app(viewer), host="127.0.0.1", port=port, log_level="warning")
+
+
+def running_url(root: Path) -> str | None:
+    """The address of this repository's running viewer, if there is one."""
+    saved = read_json(viewer_file(root), {})
+    if not saved.get("port") or _port_free(saved["port"]):
+        return None
+    try:
+        os.kill(saved["pid"], 0)
+    except (OSError, KeyError, TypeError):
+        return None
+    return saved["url"]

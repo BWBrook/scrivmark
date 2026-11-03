@@ -21,6 +21,7 @@ class Manuscript:
     bibliography: list[str] = field(default_factory=list)
     csl: str | None = None
     title: str | None = None
+    viewer_port: int | None = None
 
     def is_prose(self, path: str) -> bool:
         return path in self.files
@@ -39,7 +40,9 @@ def load(root: Path) -> Manuscript:
     if not files:
         raise ScrivError(f"{CONFIG} lists no manuscript files")
     bib = m.get("bibliography") or []
-    return Manuscript(root, files, [bib] if isinstance(bib, str) else bib, m.get("csl"), m.get("title"))
+    port = data.get("viewer", {}).get("port")
+    return Manuscript(root, files, [bib] if isinstance(bib, str) else bib, m.get("csl"), m.get("title"),
+                      int(port) if port else None)
 
 
 def detect(root: Path) -> dict:

@@ -463,7 +463,12 @@ def asks(done: Annotated[Optional[str], typer.Option(help="Dismiss an ask (the h
     """Questions the human queued for you from the viewer's Ask button."""
     rv = review.active(_root())
     if done:
+        if not any(a["id"] == done for a in review.asks(rv, include_done=True)):
+            raise ScrivError(f"No ask {done}. `scrivmark asks --all` lists every ask, including dismissed ones.")
         review.update_ask(rv, done, done=True)
+        left = len(review.asks(rv))
+        _emit({"dismissed": done, "open": left}, as_json, f"Dismissed {done}; {left} ask{'s' if left != 1 else ''} still open.")
+        return
     items = review.asks(rv, include_done=all_)
     lines = []
     for a in items:
@@ -484,7 +489,18 @@ def answer(ask_id: str, body: Annotated[str, typer.Option(help="Your answer, sho
 
 
 @app.command()
-def serve(port: Annotated[int, typer.Option()] = 0,
+def url(as_json: Json = False):
+    """Print the address of this repository's running viewer."""
+    from .server import running_url
+
+    u = running_url(_root())
+    if u is None:
+        raise ScrivError("No viewer is running for this repository. Start one with `scrivmark serve`.")
+    _emit({"url": u}, as_json, u)
+
+
+@app.command()
+def serve(port: Annotated[int, typer.Option(help="Default: scrivmark.toml's [viewer] port, else 8765 or the next free one.")] = 0,
           open_browser: Annotated[bool, typer.Option("--browser/--no-browser", help="Open a browser too.")] = False):
     """Run the local viewer and print its address."""
     from .server import run

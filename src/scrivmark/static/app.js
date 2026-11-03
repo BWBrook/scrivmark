@@ -49,7 +49,11 @@ function fail(e) {
 
 async function load(force = false) {
   let st;
-  try { st = await api("/api/state"); } catch (e) { notice(e.message); return; }
+  try { st = await api("/api/state"); } catch (e) {
+    notice(e.message);
+    if (!S.st) doc.replaceChildren(el("p", { class: "loading" }, `The manuscript could not be loaded: ${e.message}`));
+    return;
+  }
   if (!force && st.key === S.key) return;
   if (S.editing) { notice("The manuscript changed elsewhere; the page will refresh when you finish editing."); return; }
   const keep = scrollAnchor();

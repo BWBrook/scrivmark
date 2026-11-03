@@ -26,9 +26,9 @@ scrivmark start
 scrivmark serve
 ```
 
-`serve` prints an address. Open it in your browser, or in the browser pane
-beside your Claude or Codex chat. (Ask the agent: "run `scrivmark serve` in
-the background and open the address".)
+Open `http://localhost:8765` in your browser, or in the browser pane beside
+your Claude or Codex chat. (Ask the agent: "run `scrivmark serve` in the
+background and open it in the browser pane".)
 
 Now, in the viewer:
 

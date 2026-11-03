@@ -38,7 +38,7 @@ def test_manuscript_cannot_script_the_viewer_or_claim_source(repo):
 def test_server_requires_token_and_refuses_stale_edits(repo):
     rounds.start(repo)
     viewer = Viewer(repo)
-    client = TestClient(build_app(viewer))
+    client = TestClient(build_app(viewer), base_url="http://127.0.0.1")
     assert client.get("/api/state").status_code == 403
     client.cookies.set(viewer.cookie, viewer.token)
     st = client.get("/api/state").json()
@@ -50,3 +50,27 @@ def test_server_requires_token_and_refuses_stale_edits(repo):
     r = client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows", "body": "Hm."})
     assert r.status_code == 200 and r.json()["anchor"]["exact"] == "dig burrows"
     assert client.get("/files/.git/HEAD").status_code == 404
+
+
+def test_viewer_access_rules(repo):
+    rounds.start(repo)
+    viewer = Viewer(repo, 8765)
+    app = build_app(viewer)
+    local = TestClient(app, base_url="http://localhost:8765")
+    assert local.get("/").status_code == 200
+    assert local.get("/api/state").status_code == 200
+    other = TestClient(app, base_url="http://localhost:8765")
+    assert other.get("/", headers={"sec-fetch-site": "cross-site"}).status_code == 403
+    assert other.get("/api/state").status_code == 403
+    rebound = TestClient(app, base_url="http://attacker.example:8765")
+    assert rebound.get("/", params={"t": viewer.token}).status_code == 403
+
+
+def test_viewer_code_survives_restart(repo):
+    import json
+
+    from scrivmark.server import viewer_file
+
+    first = Viewer(repo, 8765)
+    viewer_file(repo).write_text(json.dumps({"token": first.token, "port": 8765}))
+    assert Viewer(repo, 8765).token == first.token

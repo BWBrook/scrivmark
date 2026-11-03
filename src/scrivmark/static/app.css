@@ -209,3 +209,4 @@ kbd { border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; font-si
 .card.ask { background: var(--ask); border-left-color: var(--ask-edge); }
 .card.ask .answer { border-top: 1px solid var(--rule); padding-top: 4px; }
 mark.scrv-hl.ask { background: transparent; border-bottom: 2px solid var(--ask-edge); }
+.loading { color: var(--muted); font-style: italic; }

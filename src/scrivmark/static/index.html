@@ -15,7 +15,7 @@
     <span id="conn" class="badge offline" hidden title="The viewer has lost touch with scrivmark serve">offline</span>
   </div>
   <div class="bar-right">
-    <span id="counts" class="muted"></span>
+    <span id="counts" class="muted" aria-live="polite"></span>
     <button id="prev" title="Previous item (k)">↑</button>
     <button id="next" title="Next change or comment (j)">↓</button>
     <button id="help" title="How this works">?</button>
@@ -26,7 +26,7 @@
 <div id="hint" hidden></div>
 <div id="files" hidden></div>
 <main id="layout">
-  <article id="doc" aria-live="polite"></article>
+  <article id="doc"><p class="loading">Rendering the manuscript…</p></article>
   <aside id="margin"></aside>
 </main>
 <div id="tool" hidden>

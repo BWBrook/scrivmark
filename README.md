@@ -61,6 +61,11 @@ scrivmark close         # merge it, keeping the record in reviews/
 `scrivmark doctor` checks your setup, and `scrivmark --help` lists every
 command. Authors can ask for a review with `scrivmark request`.
 
+The viewer listens on port 8765 (set another with `[viewer] port = 8800` in
+`scrivmark.toml`) and keeps the same address across restarts, so a launcher
+such as the Claude desktop app's browser pane can simply run `scrivmark serve`
+and open `http://localhost:8765`. `scrivmark url` prints the full address.
+
 ## How it works
 
 The design, and the decisions behind it, are in

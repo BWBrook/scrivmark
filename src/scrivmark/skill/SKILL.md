@@ -17,6 +17,15 @@ scrivmark runs manuscript review on Markdown and Quarto sources in git:
 Always use `--json` when you need to read output. Never edit
 `reviews/*.json` or `.scrivmark/` by hand.
 
+## The viewer
+
+Start it in the background with `scrivmark serve`. It listens on port 8765
+(or `[viewer] port` in `scrivmark.toml`), keeps the same address across
+restarts, and `http://localhost:8765` opens it directly on this machine.
+`scrivmark url` prints the full address of the running viewer. After a CLI
+change, the page updates within about a second; wait that long before reading
+it back.
+
 ## Where things stand
 
 ```bash
