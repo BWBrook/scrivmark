@@ -112,6 +112,25 @@ def _ver(v: str) -> tuple[int, ...]:
 
 
 @app.command()
+def skill(install: Annotated[bool, typer.Option(help="Copy the guide into ~/.claude/skills and ~/.codex/skills.")] = False):
+    """Show or install the agent guide that teaches Claude and Codex to use scrivmark."""
+    from importlib.resources import files
+
+    src = files("scrivmark") / "skill" / "SKILL.md"
+    if not install:
+        typer.echo(src.read_text())
+        return
+    done = []
+    for home in (Path.home() / ".claude", Path.home() / ".codex"):
+        if home.exists():
+            dest = home / "skills" / "scrivmark" / "SKILL.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(src.read_text())
+            done.append(str(dest))
+    typer.echo("Installed:\n  " + "\n  ".join(done) if done else "Found neither ~/.claude nor ~/.codex.")
+
+
+@app.command()
 def tutorial(target: Annotated[Path, typer.Argument(help="Folder to create.")] = Path("scrivmark-tutorial")):
     """Create a one-page practice manuscript in its own git repository."""
     from importlib.resources import files
@@ -124,12 +143,12 @@ def tutorial(target: Annotated[Path, typer.Argument(help="Folder to create.")] =
     g = lambda *a: subprocess.run(["git", *a], cwd=target, check=True, capture_output=True)  # noqa: E731
     ensure_ignored(target)
     g("init", "-q", "-b", "main")
-    g("config", "user.name", "Sam Student")
-    g("config", "user.email", "sam@example.org")
     g("add", "-A")
-    g("commit", "-q", "-m", "Draft of the wombat burrow note")
+    g("-c", "user.name=Sam Student", "-c", "user.email=sam@example.org", "commit", "-q",
+      "--author", "Sam Student <sam@example.org>", "-m", "Draft of the wombat burrow note")
     typer.echo(f"Practice manuscript ready in {target}\n\nNext:\n  cd {target}\n  scrivmark start\n  scrivmark serve\n\n"
-               "The walk-through is in TUTORIAL.md in that folder.")
+               "The walk-through is in TUTORIAL.md in that folder, and at\n"
+               "https://github.com/BWBrook/scrivmark/blob/main/src/scrivmark/tutorial/TUTORIAL.md")
 
 
 # ------------------------------------------------------------------ lifecycle
@@ -239,20 +258,33 @@ def _short(s: str, n: int = 60) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+All = Annotated[bool, typer.Option("--all", help="Every change still pending.")]
+
+
 @app.command()
-def accept(change_ids: list[str], expect: Expect = None, as_json: Json = False):
+def accept(change_ids: Annotated[Optional[list[str]], typer.Argument()] = None, all_: All = False,
+           expect: Expect = None, as_json: Json = False):
     """Accept changes (author)."""
-    _decide(change_ids, "accepted", expect, as_json)
+    _decide(change_ids or [], all_, "accepted", expect, as_json)
 
 
 @app.command()
-def reject(change_ids: list[str], expect: Expect = None, as_json: Json = False):
+def reject(change_ids: Annotated[Optional[list[str]], typer.Argument()] = None, all_: All = False,
+           expect: Expect = None, as_json: Json = False):
     """Reject changes, restoring your original text (author)."""
-    _decide(change_ids, "rejected", expect, as_json)
+    _decide(change_ids or [], all_, "rejected", expect, as_json)
 
 
-def _decide(ids: list[str], decision: str, expect: str | None, as_json: bool) -> None:
+def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_json: bool) -> None:
     rv = review.active(_root())
+    states = {c["id"]: c["state"] for c in review.changes(rv)}
+    if all_:
+        ids = [cid for cid, st in states.items() if st == "pending"]
+    unknown = [cid for cid in ids if cid not in states]
+    if unknown:
+        raise ScrivError(f"No such change: {', '.join(unknown)}. `scrivmark changes` lists them.")
+    if not ids:
+        raise ScrivError("Name the changes, e.g. `scrivmark accept c1 c3`, or use --all.")
     done = [review.decide(rv, cid, decision, _who(rv), expect) for cid in ids]
     _emit(done, as_json, "\n".join(f"{c['id']} {decision}" for c in done))
 

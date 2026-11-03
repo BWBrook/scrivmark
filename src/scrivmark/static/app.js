@@ -212,7 +212,8 @@ function drawMargin() {
 }
 
 function quoteLine(it) {
-  const q = plainQuote(it.current || it.anchor.exact);
+  const q = plainQuote(it.current ?? it.anchor.exact);
+  if (!q) return el("div", { class: "quote" }, "Where text was removed");
   return el("div", { class: "quote", title: q }, `“${q}”`);
 }
 

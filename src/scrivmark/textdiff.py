@@ -49,7 +49,8 @@ class Unit:
 def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment) -> list[Unit]:
     ot = tokens(old[oseg.b0 : oseg.b1], oseg.b0)
     nt = tokens(new[nseg.b0 : nseg.b1], nseg.b0)
-    sm = SequenceMatcher(None, [t.text for t in ot], [t.text for t in nt], autojunk=False)
+    key = lambda t: " " if t.kind == "space" else t.text  # noqa: E731
+    sm = SequenceMatcher(None, [key(t) for t in ot], [key(t) for t in nt], autojunk=False)
     ops = sm.get_opcodes()
     groups: list[list[tuple]] = []
     cur: list[tuple] = []
