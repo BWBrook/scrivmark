@@ -431,7 +431,8 @@ def run(root: Path, port: int = 0, open_browser: bool = False) -> None:
           "Open it in your browser or the app's browser pane. Ctrl-C stops it.", flush=True)
     if open_browser:
         webbrowser.open(url)
-    uvicorn.run(build_app(viewer), host="127.0.0.1", port=port, log_level="warning")
+    # The live-update streams never end by themselves, so stopping waits for them only briefly.
+    uvicorn.run(build_app(viewer), host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=1)
 
 
 def running_url(root: Path) -> str | None:
