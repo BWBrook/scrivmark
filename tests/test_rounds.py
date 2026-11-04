@@ -236,4 +236,7 @@ def test_batch_comments_are_all_or_none_and_source_comments_import(repo, tmp_pat
     first = rv.rec["threads"][-2]
     assert first["anchor"]["exact"].startswith("<!-- Codex")
     assert first["messages"][0]["by"] == "Codex" and first["messages"][0]["body"].startswith("Codex, 2026-10-23 [R1")
+    assert first["messages"][0]["at"] == "2026-10-23" and "imported_at" in first["messages"][0]
+    assert rv.rec["threads"][-1]["messages"][0]["at"] != "2026-10-23"
+    assert "reviews/" + rv.id + ".json" in review.summary(rv)["uncommitted"]
     assert review.source_comments(rv, "BWB") == []

@@ -453,7 +453,10 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
                 out.append(d)
             else:
                 t = {"id": record.new_id("t"), "status": "open", "anchor": i["anchor"],
-                     "messages": [{"id": record.new_id("m"), "by": i.get("by", who), "at": record.now(), "body": i["body"]}]}
+                     "messages": [{"id": record.new_id("m"), "by": i.get("by", who), "at": i.get("at") or record.now(),
+                                   "body": i["body"]}]}
+                if i.get("at"):
+                    t["messages"][0]["imported_at"] = record.now()
                 rv.rec["threads"].append(t)
                 out.append(t)
         writes[rv.record_rel] = record.dumps(rv.rec)
@@ -463,7 +466,7 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
 
 
 HTML_COMMENT = re.compile(r"<!--(.*?)-->", re.S)
-SIGNED = re.compile(r"^\s*([A-Z][\w.' -]{0,40}?),\s*\d{4}-\d{2}-\d{2}\b")
+SIGNED = re.compile(r"^\s*([A-Z][\w.' -]{0,40}?),\s*(\d{4}-\d{2}-\d{2})\b")
 
 
 def source_comments(rv: Review, importer: str) -> list[dict]:
@@ -482,6 +485,7 @@ def source_comments(rv: Review, importer: str) -> list[dict]:
                 signed = SIGNED.match(body)
                 out.append({"anchor": anchor_at(rv, rel, m.start(), m.end()),
                             "by": signed.group(1).strip() if signed else importer,
+                            "at": signed.group(2) if signed else None,
                             "body": f"{body}\n\n(Imported by {importer} from a comment in the source.)",
                             "line": text.count("\n", 0, m.start()) + 1})
     return out
@@ -701,4 +705,5 @@ def summary(rv: Review) -> dict:
         "threads": {"open": count(ts, "status", "open"), "resolved": count(ts, "status", "resolved"),
                     "orphaned": sum(1 for t in ts if t["where"]["state"] != "ok")},
         "drafts": len(drafts(rv)) if rv.status == "open" else 0,
+        "uncommitted": gitutil.dirty_paths(rv.root, (".scrivmark/",)),
     }

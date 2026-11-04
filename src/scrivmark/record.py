@@ -89,6 +89,7 @@ SCHEMA = {
                                 "by": {"type": "string"},
                                 "at": {"type": "string"},
                                 "body": {"type": "string"},
+                                "imported_at": {"type": "string"},
                             },
                         },
                     },

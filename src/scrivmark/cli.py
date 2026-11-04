@@ -280,7 +280,9 @@ def status(as_json: Json = False):
     human = (f"Round {r['id']} ({r['status']}), reviewer {r['reviewer']['name']}\n"
              f"Changes: {c['pending']} pending, {c['accepted']} accepted, {c['rejected']} rejected, {c['superseded']} superseded\n"
              f"Comments: {t['open']} open, {t['resolved']} resolved, {t['orphaned']} orphaned\n"
-             f"Drafts: {s['drafts']}\nRevision: {s['rev']}")
+             f"Drafts: {s['drafts']}\nRevision: {s['rev']}"
+             + (f"\nNot yet committed: {', '.join(s['uncommitted'])} (`scrivmark return` commits the round)"
+                if s["uncommitted"] else ""))
     _emit(s, as_json, human)
 
 
