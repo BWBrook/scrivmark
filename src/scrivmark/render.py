@@ -32,10 +32,11 @@ def _attrs(**kv) -> str:
 
 
 class _Builder:
-    def __init__(self, fence: str, rel: str, cur: str, nonce: str):
+    def __init__(self, fence: str, rel: str, cur: str, nonce: str, defs: str = "", includes=None):
         self.fence, self.rel, self.cur, self.nonce = fence, rel, cur, nonce
         self.tex = latex.is_tex(rel)
-        self.defs = latex.defs_block(cur) if self.tex else ""
+        self.defs = defs
+        self.includes = includes
         self.parts: list[str] = [self.defs + "\n\n"] if self.tex else []
         self.checks: list[tuple[int, str, str, str, str]] = []
 
@@ -44,6 +45,10 @@ class _Builder:
         classes = " ".join(f".{c}" for c in cls.split())
         attrs = _attrs(file=self.rel, lines=lines, c=change, n=self.nonce)
         self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{self._src(body)}\n\n{self.fence}\n\n")
+        if self.tex and self.includes:
+            for name in latex.inputs(body):
+                if child := self.includes(self.rel, name):
+                    self.parts.append(INCLUDE.format(child))
 
     def _src(self, body: str) -> str:
         return latex.code_block(body) if self.tex else body
@@ -73,6 +78,8 @@ class _Builder:
         return self.parts
 
 
+INCLUDE = "\x00scrv-include:{}\x00"
+INCLUDE_RE = re.compile("\x00scrv-include:(.*)\x00")
 FOOTNOTE_DEF = re.compile(r"^(\s{0,3})\[\^([^\]]+)\]:", re.M)
 
 
@@ -224,21 +231,49 @@ def manuscript_markdown(root: Path, ms: Manuscript, nonce: str, base: str | None
     """The wrapped Markdown for the whole manuscript. With `base` and no
     `pending`, the redline is everything changed since `base` (reviewer view);
     with `pending`, it is those frozen changes only (author view)."""
-    out = []
+    built: dict[str, list[str]] = {}
+    included: set[str] = set()
+    root_defs = ""
+
+    def includes(parent: str, name: str) -> str | None:
+        child = latex.resolve_input(root, parent, name)
+        if child in ms.files and child != parent:
+            included.add(child)
+            return child
+        return None
+
     for idx, rel in enumerate(ms.files):
         path = root / rel
         if not path.exists():
-            out.append(f"::: {{.scrv-missing}}\n*{rel} has been deleted.*\n:::\n\n")
+            built[rel] = [f"::: {{.scrv-missing}}\n*{rel} has been deleted.*\n:::\n\n"]
             continue
         cur = path.read_text()
         old = (gitutil.show(root, base, rel) or "") if base else None
-        b = _Builder(fence_for(cur + (old or "")), rel, cur, nonce)
+        defs = ""
+        if latex.is_tex(rel):
+            if latex.is_root(cur):
+                root_defs = latex.defs_block(cur)
+            defs = latex.defs_block(cur) if latex.preamble(cur) or not root_defs else root_defs
+        b = _Builder(fence_for(cur + (old or "")), rel, cur, nonce, defs, includes)
         if pending is not None:
             _author_view(b, pending.get(rel, []), idx == 0)
         else:
             _reviewer_view(b, old, idx == 0)
-        out.extend(b.finish())
-    return "".join(out)
+        built[rel] = b.finish()
+
+    def emit(rel: str, seen: tuple[str, ...]) -> list[str]:
+        out = []
+        for part in built.get(rel, []):
+            m = INCLUDE_RE.fullmatch(part)
+            if not m:
+                out.append(part)
+            elif m.group(1) not in seen:
+                out.extend(emit(m.group(1), seen + (m.group(1),)))
+                if latex.is_tex(rel):
+                    out.append(built[rel][0])
+        return out
+
+    return "".join(p for rel in ms.files if rel not in included for p in emit(rel, (rel,)))
 
 
 def render(root: Path, ms: Manuscript, base: str | None = None,

@@ -319,14 +319,7 @@ local function comment_block(blk)
   return blk
 end
 
-local function tex_note(el)
-  if el.classes:includes("scrvtexnote") then
-    el.classes = pandoc.List({ "scrv-note" })
-    return el
-  end
-end
-
-local comments = { Para = comment_block, Plain = comment_block, Span = tex_note, Div = tex_note }
+local comments = { Para = comment_block, Plain = comment_block }
 
 function Pandoc(doc)
   nonce = doc.meta["scrv-nonce"] and stringify(doc.meta["scrv-nonce"]) or ""

@@ -9,6 +9,7 @@
 
 local defs, tikz_full, tikz_min = "", "", ""
 local cache = nil
+local nonce = ""
 local labels = {}
 
 local function hex(s)
@@ -23,7 +24,11 @@ local function split_comment(line)
   local i = 1
   while i <= #line do
     local c = line:sub(i, i)
-    if c == "\\" then
+    local delim = line:match("^\\verb%*?(%p)", i)
+    if delim then
+      local close = line:find(delim, i + #line:match("^\\verb%*?%p", i), true)
+      i = (close or #line) + 1
+    elseif c == "\\" then
       i = i + 2
     elseif c == "%" then
       return line:sub(1, i - 1), line:sub(i + 1)
@@ -33,6 +38,9 @@ local function split_comment(line)
   end
   return line, nil
 end
+
+local VERBATIM = { verbatim = true, ["verbatim*"] = true, lstlisting = true, minted = true, Verbatim = true,
+  comment = true, filecontents = true, ["filecontents*"] = true }
 
 local function note(text)
   return "\\textcolor{scrvnote-" .. hex(text) .. "}{}"
@@ -48,8 +56,20 @@ local function uncomment(src)
       pending = {}
     end
   end
+  local verbatim = nil
   for line in (src .. "\n"):gmatch("(.-)\n") do
-    local code, comment = split_comment(line)
+    local code, comment
+    if verbatim then
+      code, comment = line, nil
+      if line:find("\\end%s*{" .. verbatim .. "}") then verbatim = nil end
+    else
+      code, comment = split_comment(line)
+      local env = code:match("\\begin%s*{(%a+%*?)}")
+      if env and VERBATIM[env] and not code:find("\\end%s*{" .. env:gsub("%*", "%%*") .. "}") then
+        verbatim = env:gsub("%*", "%%*")
+        code, comment = line, nil
+      end
+    end
     if join then code = code:gsub("^%s+", "") end
     if comment and not code:match("%S") then
       local text = comment:gsub("^%s+", ""):gsub("%s+$", "")
@@ -95,7 +115,7 @@ local function tikz(src)
 end
 
 local function prepare(src)
-  src = uncomment(src)
+  src = uncomment(tikz(src))
   src = src:gsub("\\input%s*%b{}", ""):gsub("\\include%s*%b{}", ""):gsub("\\subfile%s*%b{}", "")
   src = src:gsub("\\input%s+[^%s{}\\]+", "")
   -- the manuscript must not pull other files into the page
@@ -106,14 +126,18 @@ local function prepare(src)
   end
   -- older pandoc reads \cref as \ref; keep the difference in the label
   src = src:gsub("\\[cC]ref%s*{", "\\ref{scrvcref:"):gsub("\\autoref%s*{", "\\ref{scrvcref:")
-  return tikz(src)
+  return src
 end
 
 local KIND = { Figure = "fig", Table = "tbl", Header = "sec" }
 
 local function relabel(el)
   local k = KIND[el.t]
-  if k and el.identifier ~= "" and not el.identifier:match("^" .. k .. "%-") then
+  if k and el.identifier ~= "" then
+    if el.identifier:match("^" .. k .. "%-") then
+      labels[el.identifier] = el.identifier
+      return nil
+    end
     local id = k .. "-" .. el.identifier
     labels[el.identifier] = id
     el.identifier = id
@@ -128,8 +152,9 @@ local function equations(para)
     if x.t == "Math" and x.mathtype == "DisplayMath" then
       local label = x.text:match("\\label%s*{([^}]*)}")
       if label then
+        -- one number per display, as the viewer shows it
+        for other in x.text:gmatch("\\label%s*{([^}]*)}") do labels[other] = "eq-" .. label end
         x.text = x.text:gsub("\\label%s*%b{}", "")
-        labels[label] = "eq-" .. label
         out:insert(pandoc.Space())
         out:insert(pandoc.Str("{#eq-" .. label .. "}"))
         changed = true
@@ -154,7 +179,7 @@ local function marks(sp)
   local kind, rest = style:match("^color:%s*scrv(%a+)%-(.*)$")
   if not kind then return nil end
   if kind == "note" then
-    return pandoc.Span({ pandoc.Str(unhex(rest)) }, { class = "scrvtexnote" })
+    return pandoc.Span({ pandoc.Str(unhex(rest)) }, pandoc.Attr("", { "scrv-note" }, { n = nonce }))
   end
   if kind == "del" or kind == "ins" then
     local nonce, cid = rest:match("^(%x*)%-(.*)$")
@@ -167,7 +192,7 @@ end
 local function only_notes(para)
   local spans = pandoc.List({})
   for _, x in ipairs(para.content) do
-    if x.t == "Span" and x.classes:includes("scrvtexnote") then
+    if x.t == "Span" and x.classes:includes("scrv-note") and x.attributes["n"] == nonce then
       spans:insert(x)
     elseif x.t ~= "Space" and x.t ~= "SoftBreak" then
       return nil
@@ -176,7 +201,7 @@ local function only_notes(para)
   if #spans == 0 then return nil end
   local paras = {}
   for _, sp in ipairs(spans) do table.insert(paras, pandoc.Para(sp.content)) end
-  return pandoc.Div(paras, { class = "scrvtexnote" })
+  return pandoc.Div(paras, pandoc.Attr("", { "scrv-note" }, { n = nonce }))
 end
 
 local function read(src)
@@ -222,6 +247,7 @@ end
 
 function Pandoc(doc)
   cache = doc.meta["scrv-cache"] and pandoc.utils.stringify(doc.meta["scrv-cache"]) or nil
+  nonce = doc.meta["scrv-nonce"] and pandoc.utils.stringify(doc.meta["scrv-nonce"]) or ""
   doc.blocks = doc.blocks:walk(convert)
   doc.blocks = doc.blocks:walk({ Link = reference })
   return doc

@@ -266,7 +266,25 @@ def mark(kind: str, body: str, cid: str | None, nonce: str) -> str:
     return f"\\textcolor{{scrv{kind}-{nonce}-{cid or ''}}}{{{body}}}"
 
 
-def _is_root(text: str) -> bool:
+def resolve_input(root: Path, parent: str, name: str) -> str | None:
+    """The repository file an \\input{name} in `parent` reads, as LaTeX finds it
+    from the document's directory or the repository root."""
+    base = root.resolve()
+    name = name.strip()
+    for d in ((base / parent).parent, base):
+        cand = (d / (name if name.endswith(".tex") else name + ".tex")).resolve()
+        if cand.is_file() and base in cand.parents:
+            return str(cand.relative_to(base))
+    return None
+
+
+def inputs(body: str) -> list[str]:
+    """Names \\input or \\include'd in a block, in order."""
+    code = "\n".join(code_part(x) for x in body.splitlines())
+    return [m.group(1) for m in INPUT.finditer(code)]
+
+
+def is_root(text: str) -> bool:
     return bool(re.search(r"^\s*\\documentclass", text, re.M)) and "\\begin{document}" in text
 
 
@@ -281,7 +299,7 @@ def detect(root: Path, skip) -> dict | None:
         if skip(rel):
             continue
         text = p.read_text(errors="replace")
-        if _is_root(text):
+        if is_root(text):
             roots.append((p, text))
     built = {p.parent for p in root.rglob(".latexmkrc") if not skip(p.parent.relative_to(root))}
     if built and any(p.parent in built for p, _ in roots):
@@ -306,13 +324,10 @@ def detect(root: Path, skip) -> dict | None:
                     b = str(cand.relative_to(root.resolve()))
                     if b not in bibs:
                         bibs.append(b)
-        for m in INPUT.finditer(body):
-            name = m.group(1).strip()
-            for base in (root, p.parent):
-                cand = (base / (name if name.endswith(".tex") else name + ".tex")).resolve()
-                if cand.is_file() and root.resolve() in cand.parents:
-                    visit(root / cand.relative_to(root.resolve()), cand.read_text(errors="replace"), depth + 1)
-                    break
+        for name in inputs(text):
+            child = resolve_input(root, rel, name)
+            if child:
+                visit(root / child, (root / child).read_text(errors="replace"), depth + 1)
 
     for p, text in roots:
         visit(p, text)

@@ -195,3 +195,63 @@ def test_latex_cannot_pull_other_files_into_the_page(tmp_path):
     (root / "m.tex").write_text(f"\\documentclass{{article}}\n\\begin{{document}}\n{body}\n\\end{{document}}\n")
     html, _ = render.render(root, config.Manuscript(root, ["m.tex"]))
     assert "TOPSECRET" not in html
+
+
+def _render_tex(tmp_path, files: dict[str, str], order: list[str]) -> str:
+    root = tmp_path / "doc"
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    html, _ = render.render(root, config.Manuscript(root, order))
+    return html
+
+
+def test_input_renders_in_place_with_the_root_documents_macros(tmp_path):
+    main = ("\\documentclass{article}\n\\newcommand{\\animal}{wombat}\n\\begin{document}\nIntroduction here.\n\n"
+            "\\input{methods}\n\nResults here.\n\\end{document}\n")
+    html = _render_tex(tmp_path, {"main.tex": main, "methods.tex": "Child \\animal{} methods.\n"},
+                       ["main.tex", "methods.tex"])
+    text = re.sub(r"<[^>]+>", "", html)
+    assert text.index("Introduction") < text.index("Child wombat methods") < text.index("Results")
+    assert text.count("Child wombat") == 1
+
+
+def test_labels_verbatim_and_aligned_equations(tmp_path):
+    body = ("\\section{Methods}\\label{sec-methods}\nSee \\ref{sec-methods} and \\ref{eq:b}.\n\n"
+            "\\begin{verbatim}\n100% real\n\\end{verbatim}\n\n"
+            "\\begin{align}\na &= b \\label{eq:a}\\\\\nc &= d \\label{eq:b}\n\\end{align}\n")
+    html = _render_tex(tmp_path, {"m.tex": f"\\documentclass{{article}}\n\\begin{{document}}\n{body}\\end{{document}}\n"},
+                       ["m.tex"])
+    assert "??" not in html and "100% real" in html and "scrvnote" not in html
+
+
+def test_manuscript_cannot_fake_an_unprinted_note(tmp_path):
+    html = _render_tex(tmp_path, {"p.md": "Printed [prose]{.scrvtexnote} and [more]{.scrv-note}.\n"}, ["p.md"])
+    assert "scrv-note" not in html
+
+
+def test_figure_lookup_stays_inside_the_repository(texrepo):
+    rounds.start(texrepo)
+    (texrepo / "leak.png").symlink_to("/etc/hostname")
+    viewer = Viewer(texrepo)
+    c = TestClient(build_app(viewer), base_url="http://127.0.0.1")
+    c.cookies.set(viewer.cookie, viewer.token)
+    r = c.get("/png/leak.png")
+    assert open("/etc/hostname", "rb").read() not in r.content
+
+
+@pytest.mark.skipif(not (shutil.which("pdflatex") and shutil.which("pdftocairo")), reason="needs pdflatex and pdftocairo")
+def test_tikz_cannot_read_files_and_tolerates_comments(texrepo, tmp_path):
+    secret = tmp_path / "secret.tex"
+    secret.write_text("TOPSECRET")
+    rounds.start(texrepo)
+    edit(texrepo, "\\node (a) {survey};", f"% a comment\n\\node (a) {{\\input{{{secret}}}}};", "tex/main.tex")
+    edit(texrepo, "\\end{figure}", "\\end{figure}\n\n\\begin{tikzpicture}\n% A node\n\\node {Hi};\n\\end{tikzpicture}",
+         "tex/main.tex")
+    viewer = Viewer(texrepo)
+    keys = re.findall(r"/scrv-tikz/([0-9a-f]{40})\.svg", viewer.state()["html"])
+    c = TestClient(build_app(viewer), base_url="http://127.0.0.1")
+    c.cookies.set(viewer.cookie, viewer.token)
+    leaky, plain = (c.get(f"/scrv-tikz/{k}.svg").content for k in keys[-2:])
+    assert b"see the PDF" in leaky
+    assert b"see the PDF" not in plain and b"<svg" in plain

@@ -3,6 +3,7 @@ TikZ picture (written out by latex.lua) is compiled on its own to SVG. Results
 are cached under .scrivmark/cache/."""
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ from pathlib import Path
 SHOWN = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
 CANDIDATES = (".pdf", ".png", ".jpg", ".jpeg", ".svg", ".eps")
 KEY = re.compile(r"^[0-9a-f]{40}$")
+# TeX may read and write only below its working directory (and its own trees)
+CONFINED = {**os.environ, "openin_any": "p", "openout_any": "p"}
 PLACEHOLDER = """<svg xmlns="http://www.w3.org/2000/svg" width="480" height="60" viewBox="0 0 480 60">
 <rect x="0.5" y="0.5" width="479" height="59" fill="none" stroke="#999" stroke-dasharray="4 3"/>
 <text x="240" y="35" font-family="sans-serif" font-size="13" fill="#666" text-anchor="middle">{}</text></svg>"""
@@ -32,8 +35,8 @@ def resolve(root: Path, rel: str) -> Path | None:
     if p.is_file():
         return p
     for ext in CANDIDATES:
-        q = p.with_name(p.name + ext)
-        if q.is_file():
+        q = (base / (rel + ext)).resolve()
+        if base in q.parents and ".git" not in q.parts and ".scrivmark" not in q.parts and q.is_file():
             return q
     return None
 
@@ -87,8 +90,9 @@ def tikz(root: Path, key: str) -> tuple[Path | None, str]:
             continue
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error",
-                                f"-output-directory={tmp}", str(src)], capture_output=True, timeout=90, cwd=tmp)
+                shutil.copy(src, Path(tmp) / src.name)
+                subprocess.run(["pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", src.name],
+                               capture_output=True, timeout=90, cwd=tmp, env=CONFINED)
             except subprocess.TimeoutExpired:
                 continue
             pdf = Path(tmp) / (src.stem + ".pdf")

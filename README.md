@@ -46,6 +46,8 @@ from `\bibliography{...}`.
   tools, those figures show as placeholders.
 - The viewer is a faithful reading of the words, not of the page: build the
   PDF as usual to check layout and page limits.
+- Body text on the same line as `\begin{document}` is not shown; start the
+  body on the next line.
 - Citation style: pandoc's default author-date unless `csl` in
   `scrivmark.toml` names a CSL file.
 
