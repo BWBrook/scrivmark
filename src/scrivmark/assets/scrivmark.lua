@@ -263,9 +263,62 @@ local function render_deleted_cites(doc)
   })
 end
 
+-- HTML comments: raw HTML is off, so pandoc reads `<!-- ... -->` as text
+-- (with smart punctuation, `<!–` ... `–>`). Show each as a muted note: the
+-- reviewer sees what the author left in the source, marked as not printed.
+
+local function opens(s) return s:match("^<!%-%-(.*)$") or s:match("^<!–(.*)$") end
+local function closes(s) return s:match("^(.*)%-%->$") or s:match("^(.*)–>$") end
+
+local function comment_inlines(inl)
+  local out, i = pandoc.List({}), 1
+  while i <= #inl do
+    local x = inl[i]
+    local rest = x.t == "Str" and opens(x.text)
+    local j = nil
+    if rest then
+      for k = i, #inl do
+        local y = inl[k]
+        local s = (k == i) and rest or (y.t == "Str" and y.text or nil)
+        if s and closes(s) then j = k break end
+      end
+    end
+    if j then
+      local body = pandoc.List({})
+      for k = i, j do body:insert(inl[k]:clone()) end
+      local first = (i == j) and closes(rest) or rest
+      if first == "" then body:remove(1) else body[1] = pandoc.Str(first) end
+      if i ~= j then
+        local last = closes(body[#body].text)
+        if last == "" then body:remove(#body) else body[#body] = pandoc.Str(last) end
+      end
+      while #body > 0 and (body[1].t == "Space" or body[1].t == "SoftBreak") do body:remove(1) end
+      while #body > 0 and (body[#body].t == "Space" or body[#body].t == "SoftBreak") do body:remove(#body) end
+      out:insert(pandoc.Span(body, pandoc.Attr("", {"scrv-note"})))
+      i = j + 1
+    else
+      out:insert(x)
+      i = i + 1
+    end
+  end
+  return out
+end
+
+local function comment_block(blk)
+  local inl = comment_inlines(blk.content)
+  if #inl == 1 and inl[1].t == "Span" and has_class(inl[1], "scrv-note") then
+    return pandoc.Div({pandoc.Para(inl[1].content)}, pandoc.Attr("", {"scrv-note"}))
+  end
+  blk.content = inl
+  return blk
+end
+
+local comments = { Para = comment_block, Plain = comment_block }
+
 function Pandoc(doc)
   nonce = doc.meta["scrv-nonce"] and stringify(doc.meta["scrv-nonce"]) or ""
   doc = doc:walk(sanitize)
+  doc = doc:walk(comments)
   doc.blocks = label_pass(doc.blocks, false)
   doc.blocks = refs_pass(doc.blocks, "", false)
   return render_deleted_cites(doc)

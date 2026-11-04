@@ -218,3 +218,18 @@ def test_c03_renamed_section_reference_uses_the_new_title(repo):
     edit(repo, "# Results {#sec-results}", "# Findings {#sec-results}")
     html, _ = render.render(repo, config.load(repo), rv.rec["round"]["base"])
     assert ">Findings</a>" in html and "ResultsFindings" not in html
+
+
+def test_init_reads_makedoc_build_settings(tmp_path):
+    root = tmp_path / "paper"
+    (root / "settings").mkdir(parents=True)
+    (root / "text").mkdir()
+    for f in ("text/main.md", "text/figures.md", "notes.md"):
+        (root / f).write_text("Text.\n")
+    (root / "settings" / "build.yaml").write_text(
+        "default_profile: draft\nprofiles:\n  other:\n    manuscript_sources: [../notes.md]\n  draft:\n"
+        "    manuscript_sources:\n      - ../text/main.md\n      - ../text/figures.md\n"
+        "    bibliography: ../refs.yaml\n    csl: ../style.csl\n")
+    found = config.detect(root)
+    assert found["files"] == ["text/main.md", "text/figures.md"]
+    assert found["bibliography"] == ["refs.yaml"] and found["csl"] == "style.csl"

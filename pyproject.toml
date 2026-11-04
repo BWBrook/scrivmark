@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn>=0.30",
     "watchfiles>=0.24",
     "jsonschema>=4.23",
+    "pyyaml>=6",
 ]
 
 [project.scripts]

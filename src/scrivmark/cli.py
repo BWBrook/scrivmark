@@ -62,7 +62,10 @@ def init(files: Annotated[Optional[list[str]], typer.Argument(help="Manuscript f
     With no files, it shows what it would detect; add --yes to accept that.
     """
     info = rounds.init(_root(), files, write=bool(files) or yes)
-    listing = f"Manuscript: {', '.join(info['files'])}\nBibliography: {', '.join(info['bibliography']) or 'none'}"
+    listing = (f"Manuscript: {', '.join(info['files'])}\nBibliography: {', '.join(info['bibliography']) or 'none'}"
+               f"\nCitation style: {info['csl'] or 'pandoc default'}")
+    if info.get("source"):
+        listing = f"From {info['source']}:\n{listing}"
     if not info["written"]:
         _emit(info, as_json, listing + "\n\nNothing written yet. If that is right, run `scrivmark init --yes`; "
               "otherwise name the files in reading order: `scrivmark init intro.md methods.md results.md`.")

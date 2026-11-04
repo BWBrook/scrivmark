@@ -137,3 +137,11 @@ def test_bibliography_entries_span_whole_csl_yaml_and_json_items():
     assert _bib_spans("r.yaml", y) == [(2, 6, "a1"), (7, 8, "b2")]
     j = ["[", '  {"id": "a1", "title": "Brace } in \\"t\\" {"},', "  {", '    "id": "b2"', "  }", "]"]
     assert _bib_spans("r.json", j) == [(1, 1, "a1"), (2, 4, "b2")]
+
+
+def test_html_comments_show_as_muted_notes_not_literal_text(repo):
+    edit(repo, "# Methods", "# Methods\n\n<!-- Reviewer, round 1\n[K1 -- scope] Keep this. -->\n\nWe used <!-- check --> traps.")
+    html, _ = render.render(repo, config.load(repo))
+    assert "&lt;!" not in html and "--&gt;" not in html and "–&gt;" not in html
+    assert re.search(r'<div class="scrv-note">\s*<p>Reviewer, round 1 \[K1 – scope\] Keep this.</p>', html)
+    assert 'We used <span class="scrv-note">check</span> traps.' in html

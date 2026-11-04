@@ -72,7 +72,8 @@ def init(root: Path, files: list[str] | None = None, write: bool = True) -> dict
     if missing:
         raise ScrivError(f"These files do not exist: {', '.join(missing)}")
     if not write:
-        return {"files": chosen, "bibliography": found["bibliography"], "csl": found["csl"], "written": False}
+        return {"files": chosen, "bibliography": found["bibliography"], "csl": found["csl"],
+                "source": found["source"], "written": False}
     if not gitutil.ok(root, "diff", "--cached", "--quiet"):
         raise ScrivError("Other changes are staged in git. Commit or unstage them first, so the setup commit holds only scrivmark's files.")
     config.write(root, chosen, found["bibliography"], found["csl"])

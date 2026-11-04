@@ -50,7 +50,35 @@ def load(root: Path) -> Manuscript:
                       int(port) if port else None)
 
 
+def _makedoc(root: Path) -> dict | None:
+    """makedoc's settings/build.yaml names the default profile's sources,
+    bibliography and CSL, relative to the settings file."""
+    import yaml
+
+    for cfg in sorted([*root.glob("settings/*.yaml"), *root.glob("settings/*.yml")]):
+        try:
+            data = yaml.safe_load(cfg.read_text())
+        except yaml.YAMLError:
+            continue
+        profiles = data.get("profiles") if isinstance(data, dict) else None
+        if not isinstance(profiles, dict):
+            continue
+        prof = profiles.get(data.get("default_profile")) or next(iter(profiles.values()), None)
+        if not isinstance(prof, dict) or not prof.get("manuscript_sources"):
+            continue
+        rel = lambda p: os.path.relpath((cfg.parent / p).resolve(), root.resolve())  # noqa: E731
+        bib = prof.get("bibliography")
+        return {"files": [rel(p) for p in prof["manuscript_sources"]],
+                "bibliography": [rel(b) for b in (bib if isinstance(bib, list) else [bib] if bib else [])],
+                "csl": rel(prof["csl"]) if prof.get("csl") else None,
+                "source": f"{cfg.relative_to(root)} (makedoc)"}
+    return None
+
+
 def detect(root: Path) -> dict:
+    found = _makedoc(root)
+    if found:
+        return found
     files = sorted(
         str(p.relative_to(root))
         for p in root.rglob("*")
@@ -60,7 +88,7 @@ def detect(root: Path) -> dict:
     )
     bibs = sorted(str(p.relative_to(root)) for p in root.rglob("*.bib") if ".git" not in p.parts)
     csl = sorted(str(p.relative_to(root)) for p in root.rglob("*.csl") if ".git" not in p.parts)
-    return {"files": files, "bibliography": bibs, "csl": csl[0] if csl else None}
+    return {"files": files, "bibliography": bibs, "csl": csl[0] if csl else None, "source": None}
 
 
 def _toml(s: str) -> str:

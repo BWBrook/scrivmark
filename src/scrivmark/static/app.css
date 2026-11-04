@@ -210,3 +210,9 @@ kbd { border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; font-si
 .card.ask .answer { border-top: 1px solid var(--rule); padding-top: 4px; }
 mark.scrv-hl.ask { background: transparent; border-bottom: 2px solid var(--ask-edge); }
 .loading { color: var(--muted); font-style: italic; }
+
+.scrv-note { color: var(--muted); font-size: .9em; }
+div.scrv-note { border-left: 3px dashed var(--rule); padding: 2px 0 2px 12px; margin: 8px 0; }
+div.scrv-note::before { content: "Comment in the source (not printed)"; display: block; font-size: .8em; font-style: italic; }
+span.scrv-note::before { content: "⟨comment: "; }
+span.scrv-note::after { content: "⟩"; }
