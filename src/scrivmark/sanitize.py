@@ -2,11 +2,14 @@
 citeproc have all had their say. The Lua filter already cleans manuscript
 attributes; this catches any route round it."""
 
+import re
 from html import escape
 from html.parser import HTMLParser
 
 DROP_WITH_CONTENT = {"script", "style", "iframe", "object", "embed", "noscript", "template", "frame", "frameset"}
 DROP_TAG = {"link", "meta", "base", "form", "input", "button", "textarea", "select", "option"}
+# pandoc writes an image's width= and height= as style; nothing else in a style survives
+SIZE_STYLE = re.compile(r"^\s*(?:(?:width|height)\s*:\s*[\d.]+(?:%|px|em|rem|in|cm|mm|pt)\s*;?\s*)+$")
 URL_ATTRS = {"href", "src", "xlink:href", "action", "formaction", "poster", "background"}
 SAFE_SCHEMES = ("http:", "https:", "mailto:")
 
@@ -24,10 +27,13 @@ class _Clean(HTMLParser):
         self.out: list[str] = []
         self.skip = 0
 
-    def _attrs(self, attrs) -> str:
+    def _attrs(self, attrs, tag: str = "") -> str:
         kept = []
         for k, v in attrs:
             k = k.lower()
+            if k == "style" and tag == "img" and v and SIZE_STYLE.match(v):
+                kept.append(f' style="{escape(v, quote=True)}"')
+                continue
             if k.startswith("on") or k in ("style", "srcdoc", "formaction"):
                 continue
             if k in URL_ATTRS and v is not None and not _safe_url(v):
@@ -41,12 +47,12 @@ class _Clean(HTMLParser):
             return
         if self.skip or tag in DROP_TAG:
             return
-        self.out.append(f"<{tag}{self._attrs(attrs)}>")
+        self.out.append(f"<{tag}{self._attrs(attrs, tag)}>")
 
     def handle_startendtag(self, tag, attrs):
         if self.skip or tag in DROP_TAG or tag in DROP_WITH_CONTENT:
             return
-        self.out.append(f"<{tag}{self._attrs(attrs)} />")
+        self.out.append(f"<{tag}{self._attrs(attrs, tag)} />")
 
     def handle_endtag(self, tag):
         if tag in DROP_WITH_CONTENT:

@@ -190,3 +190,11 @@ def test_doctor_fails_only_on_missing_essentials(tmp_path, monkeypatch):
     monkeypatch.delenv("SCRIVMARK_AS")
     bad = CliRunner().invoke(app, ["doctor"])
     assert bad.exit_code == 1 and "✗ identity" in bad.output
+
+
+def test_image_size_survives_but_other_styles_do_not():
+    from scrivmark import sanitize
+
+    html = sanitize.clean('<p><img src="a.png" style="width:95%" /><img src="b.png" style="width:5em;background:url(x)" />'
+                          '<span style="width:9px">t</span></p>')
+    assert 'style="width:95%"' in html and "background" not in html and "<span>" in html
