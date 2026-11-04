@@ -97,6 +97,15 @@ SCHEMA = {
                 },
             },
         },
+        "drafted_edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["by", "file", "was", "wording", "at"],
+                "properties": {"by": {"type": "string"}, "file": {"type": "string"}, "was": {"type": "string"},
+                               "wording": {"type": "string"}, "at": {"type": "string"}},
+            },
+        },
         "asks": {
             "type": "array",
             "items": {

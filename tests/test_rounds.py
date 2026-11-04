@@ -249,3 +249,22 @@ def test_drafts_record_which_agent_wrote_them(repo):
     t = review.triage(review.active(repo), d["id"], True, "BWB")
     assert t["messages"][0]["by"] == "BWB" and t["messages"][0]["drafted_by"] == "Codex (gpt-6.1-terra)"
     record.validate(review.active(repo).rec)
+
+
+def test_wording_only_drafts_apply_as_edits_without_a_thread(repo, tmp_path):
+    from typer.testing import CliRunner
+
+    from scrivmark.cli import app
+    rounds.start(repo)
+    f = tmp_path / "e.json"
+    f.write_text(json.dumps([{"file": "paper.md", "quote": "should should", "wording": "should"}]))
+    r = CliRunner().invoke(app, ["comment", "--from", str(f), "--draft", "--by", "Codex (gpt-6.1-terra)"])
+    assert r.exit_code == 0, r.output
+    rv = review.active(repo)
+    d = review.drafts(rv)[0]
+    assert d["body"] == "" and d["by"] == "Codex (gpt-6.1-terra)"
+    assert review.triage(rv, d["id"], True, "BWB") is None
+    assert "should should" not in (repo / "paper.md").read_text()
+    rec = review.active(repo).rec
+    record.validate(rec)
+    assert rec["drafted_edits"][0]["by"] == "Codex (gpt-6.1-terra)" and rec["drafted_edits"][0]["was"] == "should should"

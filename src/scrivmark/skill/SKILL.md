@@ -82,6 +82,13 @@ author: accept, reject, reply, resolve, edit.
 
   (`prefix`, `suffix` and `lines` work as on the command line; JSON Lines and
   `--from -` for stdin also work.)
+- **Line edits from a second agent.** When another agent has already edited
+  the files in this round, propose your edits as drafts with `wording` and an
+  empty `body` instead of editing files: each shows as "Line edit, no
+  comment", and keeping it applies the edit as a tracked change, recorded as
+  drafted by you. Quote the smallest passage that contains the change (a
+  phrase or sentence), so each edit can be kept or dropped on its own. Add a
+  body only when the edit needs a reason.
 - **Comments left in the source.** If the Markdown carries `<!-- ... -->`
   comments from an earlier review, they show as grey notes but are not
   threads. `scrivmark import-comments --dry-run` lists them; at the start of a

@@ -234,6 +234,12 @@ at return and again at close, so asks from both phases are kept, dismissed or
 not. Barry, 3 November 2026, chose "Always, with a notice" over per-ask or
 configurable archiving.
 
+An optional `drafted_edits` array names the agent behind each edit that came
+from a kept draft (`by`, `file`, the text it replaced as `was`, `wording`,
+`at`). Edits made directly in the files carry no such attribution; when two
+agents review in one round, the second proposes its line edits as drafts so
+the record can tell them apart.
+
 ## Anchoring
 
 An anchor stores its file, the commit and character range it was made on, and

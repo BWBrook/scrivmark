@@ -301,7 +301,7 @@ function draftCard(d) {
   const c = el("div", { class: "card draft", tabindex: "-1" },
     el("div", { class: "tag" }, d.by ? `Draft from ${d.by}` : "Draft from your agent"),
     quoteLine(d),
-    el("div", { class: "msg" }, d.body),
+    d.body ? el("div", { class: "msg" }, d.body) : el("div", { class: "muted small" }, "Line edit, no comment"),
     d.wording !== null ? el("div", { class: "wording", title: "Applied as an edit if kept" }, `→ ${d.wording || "(delete the passage)"}`) : null);
   c.append(el("div", { class: "acts" },
     el("button", { class: "primary", onclick: e => { e.stopPropagation(); triage(d.id, "keep"); } }, d.wording !== null ? "Keep & apply" : "Keep"),

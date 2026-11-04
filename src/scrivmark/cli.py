@@ -414,21 +414,23 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             raise ScrivError(f"--from is not valid JSON or JSON Lines: {e}") from e
         items = []
         for n, d in enumerate(data, 1):
-            if not isinstance(d, dict) or not d.get("file") or not d.get("body"):
-                raise ScrivError(f"Item {n} needs at least file and body.")
+            is_draft = bool(d.get("draft", draft)) if isinstance(d, dict) else False
+            if not isinstance(d, dict) or not d.get("file") or not (d.get("body") or (is_draft and d.get("wording") is not None)):
+                raise ScrivError(f"Item {n} needs file and body (a draft with wording may leave body empty).")
             if d.get("wording") is not None and not (d.get("draft") or draft):
                 raise ScrivError(f"Item {n}: wording applies to drafts.")
             try:
                 anchor = _anchor(rv, d["file"], d.get("quote"), d.get("prefix", ""), d.get("suffix", ""), d.get("lines"))
             except ScrivError as e:
                 raise ScrivError(f"Item {n} ({d['file']}): {e}. Nothing was added.") from e
-            items.append({"anchor": anchor, "body": d["body"], "draft": bool(d.get("draft", draft)), "wording": d.get("wording"),
+            items.append({"anchor": anchor, "body": d.get("body") or "", "draft": bool(d.get("draft", draft)), "wording": d.get("wording"),
                           **({"by": d.get("by") or by or os.environ.get("SCRIVMARK_AGENT")} if d.get("draft", draft) else {})})
         out = review.add_many(rv, items, _who(rv), expect)
         _emit(out, as_json, f"Added {len(out)}: " + ", ".join(x["id"] for x in out))
         return
-    if not file or not body:
-        raise ScrivError("Give FILE and --body, or --from a file of comments.")
+    if not file or not (body or (draft and wording is not None)):
+        raise ScrivError("Give FILE and --body (a draft with --wording may omit it), or --from a file of comments.")
+    body = body or ""
     anchor = _anchor(rv, file, quote, prefix, suffix, lines)
     if draft:
         d = review.add_draft(rv, anchor, body, wording, expect, by or os.environ.get("SCRIVMARK_AGENT"))

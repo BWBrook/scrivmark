@@ -595,8 +595,13 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
         wording = d["wording"] if wording is None else wording
         anchor = d["anchor"]
         if wording is not None:
+            was = anchor["exact"]
             anchor = _apply_wording(rv, anchor, wording, writes, "The draft's passage has been edited since it "
                                     "was written, so its wording was not applied. Edit the draft, or drop it.")
+            if d.get("by"):
+                rv.rec.setdefault("drafted_edits", []).append(
+                    {"by": d["by"], "file": anchor["file"], "was": was, "wording": wording, "at": record.now()})
+                writes[rv.record_rel] = record.dumps(rv.rec)
         t = None
         if body and body.strip():
             t = {
