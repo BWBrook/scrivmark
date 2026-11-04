@@ -369,6 +369,8 @@ def resolve(rv: Review, a: dict) -> dict:
     ok, edited  its surroundings are intact and the passage itself was edited,
                 or it was rewritten and solid context survives close by on
                 both sides (the thread follows the new text);
+    ok, removed it was deleted outright where context survives on both sides;
+                the range is the empty point where it was;
     ok, moved   it is no longer where it was, but occurs once elsewhere with
                 its full original context;
     orphan      none of these holds. A lookalike passage elsewhere is listed
@@ -389,14 +391,18 @@ def resolve(rv: Review, a: dict) -> dict:
         if left and right and left[1] <= right[0]:
             return {"state": "ok", "how": "edited", "edited": True, "range": [left[1], right[0]]}
         near = pr.around(s, e)
-        if near:
+        if near and near[0] < near[1]:
             return {"state": "ok", "how": "edited", "edited": True, "range": list(near)}
+    else:
+        near = None
     hits = _occurrences(cur, a["exact"])
     full = len(a["prefix"]) + len(a["suffix"])
     whole = [i for i in hits if _context_score(cur, i, a) == full]
     if len(whole) == 1 and a["exact"]:
         i = whole[0]
         return {"state": "ok", "how": "moved", "range": [i, i + len(a["exact"])]}
+    if near and a["exact"]:
+        return {"state": "ok", "how": "removed", "edited": True, "range": list(near)}
     return {"state": "orphan", "candidates": [[i, i + len(a["exact"])] for i in hits]}
 
 
@@ -447,6 +453,18 @@ def set_thread(rv: Review, tid: str, status: str, expect: str | None = None) -> 
     return t
 
 
+def reattach(rv: Review, tid: str, anchor: dict, expect: str | None = None) -> dict:
+    """Give a thread a new passage, by hand, keeping what it was first about."""
+    if rv.status == "closed":
+        raise ScrivError("This round is closed.")
+    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+        rv.reload()
+        t = _thread(rv, tid)
+        t["anchor"] = dict(anchor, was=t["anchor"].get("was") or t["anchor"].get("removed") or t["anchor"]["exact"])
+        writes[rv.record_rel] = record.dumps(rv.rec)
+    return t
+
+
 def rebase_anchors(rv: Review, commit: str) -> list[str]:
     """Re-express every resolvable anchor against `commit`; return orphan ids."""
     orphans = []
@@ -457,6 +475,8 @@ def rebase_anchors(rv: Review, commit: str) -> list[str]:
             continue
         s, e = where["range"]
         text = rv.text(t["anchor"]["file"])
+        if where["how"] == "removed":
+            t["anchor"]["removed"] = t["anchor"].get("removed") or t["anchor"]["exact"]
         t["anchor"].update({
             "rev": f"git:{commit}", "range": [s, e], "exact": text[s:e],
             "prefix": text[max(0, s - CONTEXT) : s], "suffix": text[e : e + CONTEXT],

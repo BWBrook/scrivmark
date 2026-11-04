@@ -103,6 +103,10 @@ author: accept, reject, reply, resolve, edit.
 
 ## Conflicts and refusals
 
+A comment whose passage was rewritten past recognition shows as orphaned. If
+the human tells you where it belongs, `scrivmark reattach <thread> <file>
+--quote "..."` moves it there.
+
 scrivmark refuses rather than guess: an ambiguous quote, a change it cannot
 locate exactly, a stale revision, untracked files at `return` or `close`.
 Read the message, fix the cause, and try again. Never work round a refusal by

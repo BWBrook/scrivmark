@@ -47,12 +47,60 @@ class Unit:
     new_text: str
 
 
+def _key(t: Token) -> str:
+    return " " if t.kind == "space" else t.text
+
+
+def _boundary(seq: list[Token], y: int) -> int:
+    """How natural a place position y is for an edit to start or end."""
+    if y <= 0 or y >= len(seq):
+        return 6
+    a, b = seq[y - 1], seq[y]
+    space = next((t for t in (a, b) if t.kind == "space"), None)
+    if space:
+        return 4 if "\n" in space.text else 3
+    return 1 if "punct" in (a.kind, b.kind) else 0
+
+
+def _slide(ops: list[tuple], ot: list[Token], nt: list[Token]) -> list[tuple]:
+    """Move each pure insertion or deletion to the equivalent position whose
+    edges fall at spaces or line breaks, as diff-match-patch's semantic cleanup
+    does, so "(0.40); ... between" is not reported as "0.40); ... between (" ."""
+    ops = [list(o) for o in ops]
+    for k in range(1, len(ops) - 1):
+        tag = ops[k][0]
+        if tag not in ("insert", "delete") or ops[k - 1][0] != "equal" or ops[k + 1][0] != "equal":
+            continue
+        seq, x1, x2 = (nt, ops[k][3], ops[k][4]) if tag == "insert" else (ot, ops[k][1], ops[k][2])
+        before, after = ops[k - 1][2] - ops[k - 1][1], ops[k + 1][2] - ops[k + 1][1]
+        best, top = 0, _boundary(seq, x1) + _boundary(seq, x2)
+        s = 0
+        while s < before and _key(seq[x1 - 1 - s]) == _key(seq[x2 - 1 - s]):
+            s += 1
+            score = _boundary(seq, x1 - s) + _boundary(seq, x2 - s)
+            if score > top:
+                best, top = -s, score
+        s = 0
+        while s < after and _key(seq[x1 + s]) == _key(seq[x2 + s]):
+            s += 1
+            score = _boundary(seq, x1 + s) + _boundary(seq, x2 + s)
+            if score > top or (score == top and best != 0 and s < abs(best)):
+                best, top = s, score
+        if best:
+            for idx in range(1, 5):
+                ops[k][idx] += best
+            ops[k - 1][2] += best
+            ops[k - 1][4] += best
+            ops[k + 1][1] += best
+            ops[k + 1][3] += best
+    return [tuple(o) for o in ops if o[0] != "equal" or o[2] > o[1]]
+
+
 def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment) -> list[Unit]:
     ot = tokens(old[oseg.b0 : oseg.b1], oseg.b0)
     nt = tokens(new[nseg.b0 : nseg.b1], nseg.b0)
-    key = lambda t: " " if t.kind == "space" else t.text  # noqa: E731
-    sm = SequenceMatcher(None, [key(t) for t in ot], [key(t) for t in nt], autojunk=False)
-    ops = sm.get_opcodes()
+    sm = SequenceMatcher(None, [_key(t) for t in ot], [_key(t) for t in nt], autojunk=False)
+    ops = _slide(sm.get_opcodes(), ot, nt)
     groups: list[list[tuple]] = []
     cur: list[tuple] = []
     for idx, op in enumerate(ops):
@@ -209,7 +257,8 @@ class Projection:
         """Where [s, e) went if it was rewritten: the new text between the
         nearest unchanged stretches of at least `solid` characters on either
         side, provided each lies within `slack` characters of the passage. The
-        start and end of the file count as unchanged."""
+        start and end of the file count as unchanged. A passage deleted outright
+        comes back as the empty range where it was."""
         if self.identity:
             return s, e
         left = 0 if s <= slack else None
@@ -221,7 +270,7 @@ class Projection:
                 left = na + min(n, s - oa)
             if oa + n > e and oa <= e + slack and (right is None or right == self.new_len):
                 right = na + max(0, e - oa)
-        if left is None or right is None or left >= right:
+        if left is None or right is None or left > right:
             return None
         return left, right
 

@@ -403,6 +403,19 @@ def comment(file: str,
 
 
 @app.command()
+def reattach(thread_id: str, file: str,
+             quote: Annotated[Optional[str], typer.Option(help="Exact source text the thread is now about.")] = None,
+             prefix: Annotated[str, typer.Option(help="Text just before the quote, to pick one occurrence.")] = "",
+             suffix: Annotated[str, typer.Option(help="Text just after the quote.")] = "",
+             lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14.")] = None,
+             expect: Expect = None, as_json: Json = False):
+    """Move a thread that lost its place onto a passage."""
+    rv = review.active(_root())
+    t = review.reattach(rv, thread_id, _anchor(rv, file, quote, prefix, suffix, lines), expect)
+    _emit(t, as_json, f"Re-attached {t['id']}.")
+
+
+@app.command()
 def reply(thread_id: str, body: Annotated[str, typer.Option()], expect: Expect = None, as_json: Json = False):
     """Reply to a thread."""
     rv = review.active(_root())

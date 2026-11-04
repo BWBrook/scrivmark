@@ -273,6 +273,8 @@ function layoutMargin() {
 }
 
 function quoteLine(it) {
+  const gone = plainQuote(it.anchor.removed || (it.current === "" ? it.anchor.exact : ""));
+  if (gone) return el("div", { class: "quote", title: gone }, `“${gone}” (removed)`);
   const q = plainQuote(it.current ?? it.anchor.exact);
   if (!q) return el("div", { class: "quote" }, "Where text was removed");
   return el("div", { class: "quote", title: q }, `“${q}”`);
@@ -281,11 +283,13 @@ function quoteLine(it) {
 function threadCard(t) {
   const orphan = !t.line;
   const c = el("div", { class: `card ${t.status}${orphan ? " orphan" : ""}`, tabindex: "-1" },
-    orphan ? el("div", { class: "tag" }, "Lost its place: the passage was changed or removed") : null,
+    orphan ? el("div", { class: "tag" }, "Lost its place: its passage was rewritten past recognition") : null,
     quoteLine(t),
     ...t.messages.map(m => el("div", { class: "msg" }, el("span", { class: "by" }, m.by), m.body)));
   if (!S.st.round || S.st.mode === "closed") return c;
   c.append(el("div", { class: "acts" },
+    orphan ? el("button", { class: "primary", title: "Select the passage in the text first",
+      onmousedown: e => e.preventDefault(), onclick: e => { e.stopPropagation(); reattach(t.id); } }, "Attach to selection") : null,
     el("button", { onclick: e => { e.stopPropagation(); replyBox(c, t); } }, "Reply"),
     t.status === "open"
       ? el("button", { onclick: e => { e.stopPropagation(); setThread(t.id, "resolved"); } }, "Resolve")
@@ -340,6 +344,15 @@ function askComment(card, a, restoring = false) {
       el("button", { onclick: () => closeComposer(key) }, "Cancel")));
   if (!restoring) ta.focus();
   layoutMargin();
+}
+
+async function reattach(id) {
+  const s = currentSelection();
+  if (!s || !s.text) return notice("First select the passage this comment is about, then press Attach to selection.", 6000);
+  try {
+    await api("/api/thread", { thread: id, reattach: true, file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key, rev: S.st.rev });
+    getSelection().removeAllRanges();
+  } catch (e) { fail(e); }
 }
 
 async function applyAsk(id) {

@@ -280,6 +280,9 @@ def build_app(viewer: Viewer) -> Starlette:
     async def thread_status(request: Request):
         b = await body_of(request)
         rv = viewer.need()
+        if b.get("reattach"):
+            viewer.check_render(b)
+            return JSONResponse(review.reattach(rv, b["thread"], viewer.anchor_from(rv, b), b.get("rev")))
         return JSONResponse(review.set_thread(rv, b["thread"], b["status"], b.get("rev")))
 
     async def decide(request: Request):

@@ -60,7 +60,8 @@ def test_f02_draft_never_moves_to_a_lookalike_claim(repo):
         review.triage(rv, d["id"], True, "BWB")
     assert (repo / "paper.md").read_text() == "South site: detection was high.\n"
     assert [x["id"] for x in review.drafts(rv)] == [d["id"]]
-    assert review.drafts(rv)[0]["where"]["state"] == "orphan"
+    w = review.drafts(rv)[0]["where"]
+    assert w["state"] == "orphan" or (w["how"] == "removed" and w["range"] == [0, 0])
 
 
 def test_f03_metadata_cannot_script_the_viewer(repo):

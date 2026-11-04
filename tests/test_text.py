@@ -70,4 +70,5 @@ def test_projection_follows_a_rewritten_passage_but_not_a_deleted_one():
     r = Projection(old, new).around(s, e)
     assert r and new[r[0]:r[1]] == "Occupancy is higher on sunny aspects."
     gone = old.replace(" It proves that wombats prefer sunny burrows.", "")
-    assert Projection(old, gone).around(s, e) is None
+    p = old.index(" It proves")
+    assert Projection(old, gone).around(s, e) == (p, p)

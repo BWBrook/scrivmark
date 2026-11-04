@@ -65,7 +65,7 @@ def test_author_branch_moving_mid_round_is_merged(repo, monkeypatch):
     assert [review.change_status(rv, c) for c in rv.rec["changes"]] == ["pending", "pending"]
 
 
-def test_comment_follows_an_edited_passage_and_orphans_a_deleted_one(repo):
+def test_comment_follows_an_edited_passage_and_marks_a_deleted_one_removed(repo):
     rv = rounds.start(repo)
     t1 = review.comment(rv, review.anchor_quote(rv, "paper.md", "120 burrows"), "How chosen?", "BWB")
     t2 = review.comment(rv, review.anchor_quote(rv, "paper.md", "Abundance was not estimated"), "Why?", "BWB")
@@ -74,7 +74,7 @@ def test_comment_follows_an_edited_passage_and_orphans_a_deleted_one(repo):
     rv.reload()
     where = {t["id"]: t["where"] for t in review.threads(rv)}
     assert where[t1["id"]]["state"] == "ok"
-    assert where[t2["id"]]["state"] == "orphan"
+    assert where[t2["id"]]["how"] == "removed" and len(set(where[t2["id"]]["range"])) == 1
 
 
 def test_ambiguous_quote_is_refused(repo):
@@ -182,3 +182,27 @@ def test_answer_wording_applies_and_answered_asks_are_archived(repo, monkeypatch
     kept = record.load(repo, rid)["asks"]
     assert [(k["question"], k["answered_by"], bool(k.get("applied")), k["done"]) for k in kept] == [
         ("Overclaimed?", "Claude Opus 5.5", True, False), ("Too strong?", "Claude Opus 5.5", False, True)]
+
+
+def test_comment_on_a_deleted_sentence_stays_at_the_deletion_point(repo, monkeypatch):
+    rv = rounds.start(repo)
+    t = review.comment(rv, review.anchor_quote(rv, "paper.md", "The data was clear."), "Data are plural.", "BWB")
+    edit(repo, "The data was clear. ", "")
+    where = review.threads(rv)[0]["where"]
+    assert where["state"] == "ok" and where["how"] == "removed" and where["range"][0] == where["range"][1]
+    rid = rounds.return_round(repo, push=False)["round"]
+    kept = record.load(repo, rid)["threads"][0]["anchor"]
+    assert kept["removed"] == "The data was clear." and kept["exact"] == ""
+    assert t["id"] == record.load(repo, rid)["threads"][0]["id"]
+
+
+def test_an_orphaned_thread_can_be_reattached(repo):
+    rv = rounds.start(repo)
+    t = review.comment(rv, review.anchor_quote(rv, "paper.md", "thermal benefits drive"), "Overclaimed?", "BWB")
+    text = (repo / "paper.md").read_text()
+    start = text.index("# Discussion")
+    (repo / "paper.md").write_text(text[:start] + "# Discussion\n\nSomething else entirely is argued now.\n")
+    assert review.threads(rv)[0]["where"]["state"] == "orphan"
+    review.reattach(rv, t["id"], review.anchor_quote(rv, "paper.md", "Something else entirely"))
+    th = review.threads(rv)[0]
+    assert th["where"]["state"] == "ok" and " ".join(th["anchor"]["was"].split()) == "thermal benefits drive"

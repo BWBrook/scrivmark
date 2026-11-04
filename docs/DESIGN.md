@@ -242,10 +242,21 @@ Hypothesis does, all against **source** text. Re-anchoring:
 
 1. project the range from its commit to the current text through the git diff;
    if the projected text still equals `exact`, done;
-2. otherwise search for `exact` with its context; one clear winner is accepted;
-3. otherwise, or on any tie, the thread is **orphaned** and shown with its quote
-   and candidate locations for a human to re-attach. It is never moved
-   silently.
+2. if the passage was edited or rewritten but solid unchanged text (12 or more
+   characters) survives within 80 characters on both sides, the thread follows
+   the new text between them (`edited`);
+3. otherwise search for `exact` with its full context; one clear winner is
+   accepted (`moved`);
+4. if the passage was deleted outright with its surroundings intact, the
+   thread stays at the point where it was (`removed`), and the record keeps
+   the deleted text, so the card reads "“…” (removed)";
+5. otherwise, or on any tie, the thread is **orphaned** and shown with its
+   quote. It is never moved silently: the human selects the passage it belongs
+   to and presses **Attach to selection** (`scrivmark reattach` for agents),
+   and the anchor keeps what it was first about as `was`.
+
+Proposed wording (drafts, ask answers) is applied only to an `exact` or
+`moved` passage, never to an edited, removed or orphaned one.
 
 ## Viewer
 
