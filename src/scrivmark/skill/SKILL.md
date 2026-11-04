@@ -22,12 +22,17 @@ This guide is loaded when your session starts. If scrivmark was upgraded since,
 
 ## The viewer
 
-Start it in the background with `scrivmark serve`. It listens on port 8765
-(or `--port`, then `$PORT` from a launcher, then `[viewer] port` in
+If the repository has a `.claude/launch.json` entry for `scrivmark serve`,
+let the browser pane start the viewer from it, and do not start one yourself.
+Otherwise start it in the background with `scrivmark serve`. It listens on
+port 8765 (or `--port`, then `$PORT` from a launcher, then `[viewer] port` in
 `scrivmark.toml`), keeps the same address across restarts, and
-`http://localhost:8765` opens it directly on this machine. For the desktop
-apps' browser pane, a `.claude/launch.json` entry running `scrivmark serve`
-with `"port": 8765` and `"autoPort": false` is all it needs.
+`http://localhost:8765` opens it directly on this machine. Only one viewer
+runs per repository: a second `scrivmark serve` prints the running one's
+address and exits. If 8765 is taken by another program, the default moves to
+the next free port and says so. For the desktop apps' browser pane, a
+`.claude/launch.json` entry running `scrivmark serve` with `"port": 8765` and
+`"autoPort": false` is all it needs.
 `scrivmark url` prints the full address of the running viewer. After a CLI
 change, the page updates within about a second; wait that long before reading
 it back.
@@ -35,7 +40,7 @@ it back.
 ## Where things stand
 
 ```bash
-scrivmark status --json      # round, phase, counts, revision
+scrivmark status --json      # round, phase, counts, revision; author is null until the author opens the returned round
 scrivmark threads --json     # comments, with anchors and where they sit now
 scrivmark changes --json     # after return: each change, its id and state
 scrivmark drafts --json      # reviewer phase: drafts awaiting triage

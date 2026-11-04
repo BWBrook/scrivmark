@@ -87,17 +87,18 @@ def whoami(name: Annotated[Optional[str], typer.Option()] = None,
 
 @app.command()
 def doctor(as_json: Json = False):
-    """Check tools, configuration and identity."""
+    """Check tools, configuration and identity. Exits 1 if anything needed is
+    missing (✗); notes (·) are optional tools or a repository not yet set up."""
     checks = []
 
-    def check(name, ok, detail=""):
-        checks.append({"check": name, "ok": bool(ok), "detail": detail})
+    def check(name, ok, detail="", note=False):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail, "note": note and not ok})
 
     check("git", shutil.which("git"))
     pandoc = shutil.which("pandoc")
     ver = subprocess.run(["pandoc", "--version"], capture_output=True, text=True).stdout.split("\n")[0] if pandoc else ""
     check("pandoc ≥ 3.1", pandoc and _ver(ver.split()[-1]) >= (3, 1), ver)
-    check("gh (optional, for pull requests)", shutil.which("gh"), "not required")
+    check("gh (optional, for pull requests)", shutil.which("gh"), "" if shutil.which("gh") else "not installed", note=True)
     try:
         me = config.identity()
         check("identity", True, f"{me.name} ({me.initials})")
@@ -125,12 +126,16 @@ def doctor(as_json: Json = False):
             check(f"bibliography {b}", (root / b).exists())
         if any(latex.is_tex(f) for f in ms.files):
             for tool, why in (("pdftocairo", "shows PDF figures"), ("pdflatex", "draws TikZ pictures")):
-                check(f"{tool} (optional, {why})", shutil.which(tool), "" if shutil.which(tool) else "not found; those figures show as placeholders")
+                check(f"{tool} (optional, {why})", shutil.which(tool),
+                      "" if shutil.which(tool) else "not found; those figures show as placeholders", note=True)
         if any(f.endswith(".qmd") for f in ms.files):
             check(".qmd rendering", True, "rendered with pandoc in this version; Quarto code outputs are not shown yet")
     except ScrivError as e:
-        check("repository", False, str(e))
-    _emit(checks, as_json, "\n".join(f"{'✓' if c['ok'] else '✗'} {c['check']}  {c['detail']}" for c in checks))
+        check("repository", False, f"not set up for scrivmark yet ({e})", note=True)
+    mark = lambda c: "✓" if c["ok"] else "·" if c["note"] else "✗"  # noqa: E731
+    _emit(checks, as_json, "\n".join(f"{mark(c)} {c['check']}  {c['detail']}" for c in checks))
+    if any(not c["ok"] and not c["note"] for c in checks):
+        raise typer.Exit(1)
 
 
 def _ver(v: str) -> tuple[int, ...]:

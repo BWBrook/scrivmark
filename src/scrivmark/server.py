@@ -10,6 +10,7 @@ import mimetypes
 import os
 import secrets
 import socket
+import sys
 import webbrowser
 from importlib.resources import files
 from pathlib import Path
@@ -436,24 +437,42 @@ def _port_free(port: int) -> bool:
             return False
 
 
-def choose_port(asked: int, configured: int | None) -> int:
+def named_port(asked: int, configured: int | None) -> int:
     """--port, else $PORT (set by launchers such as the desktop apps'), else
-    scrivmark.toml's, else 8765. Only the default moves along to the next free
-    port; a named port that is busy is an error."""
+    scrivmark.toml's; 0 when none is named."""
     env = os.environ.get("PORT", "")
-    port = asked or (int(env) if env.isdigit() else 0) or configured
+    return asked or (int(env) if env.isdigit() else 0) or configured or 0
+
+
+def choose_port(asked: int, configured: int | None) -> int:
+    """The named port, else 8765. Only the default moves along to the next free
+    port, and says so; a named port that is busy is an error."""
+    port = named_port(asked, configured)
     if port:
         if not _port_free(port):
-            raise ScrivError(f"Port {port} is in use. Is a viewer already running? `scrivmark url` shows it.")
+            raise ScrivError(f"Port {port} is in use by another program; free it or name another port with --port.")
         return port
     for port in range(DEFAULT_PORT, DEFAULT_PORT + 40):
         if _port_free(port):
+            if port != DEFAULT_PORT:
+                print(f"scrivmark: port {DEFAULT_PORT} is in use by another program; using {port}.",
+                      file=sys.stderr, flush=True)
             return port
     raise ScrivError("No free port between 8765 and 8804; pass --port.")
 
 
-def run(root: Path, port: int = 0, open_browser: bool = False) -> None:
+def run(root: Path, port: int = 0, open_browser: bool = False) -> bool:
+    """Serve until stopped. If this repository's viewer is already running, say
+    where and return False instead of starting a second one."""
     ms = config.load(root)
+    if existing := running_url(root):
+        named = named_port(port, ms.viewer_port)
+        held = read_json(viewer_file(root), {}).get("port")
+        if named and named != held:
+            raise ScrivError(f"This repository's viewer is already running on port {held}, not {named}: {existing}\n"
+                             "Use that address, or stop that viewer first.")
+        print(f"scrivmark viewer already running: {existing}", flush=True)
+        return False
     port = choose_port(port, ms.viewer_port)
     viewer = Viewer(root, port)
     url = f"http://127.0.0.1:{port}/?t={viewer.token}"
@@ -464,6 +483,7 @@ def run(root: Path, port: int = 0, open_browser: bool = False) -> None:
         webbrowser.open(url)
     # The live-update streams never end by themselves, so stopping waits for them only briefly.
     uvicorn.run(build_app(viewer), host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=1)
+    return True
 
 
 def running_url(root: Path) -> str | None:

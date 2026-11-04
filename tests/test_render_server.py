@@ -145,3 +145,48 @@ def test_html_comments_show_as_muted_notes_not_literal_text(repo):
     assert "&lt;!" not in html and "--&gt;" not in html and "–&gt;" not in html
     assert re.search(r'<div class="scrv-note">\s*<p>Reviewer, round 1 \[K1 – scope\] Keep this.</p>', html)
     assert 'We used <span class="scrv-note">check</span> traps.' in html
+
+
+def test_second_serve_reuses_this_repositorys_viewer(repo, monkeypatch, capsys):
+    import json
+    import os
+    import socket
+
+    import pytest
+
+    from scrivmark import server
+    from scrivmark.errors import ScrivError
+
+    held = socket.socket()
+    held.bind(("127.0.0.1", 0))
+    held.listen()
+    port = held.getsockname()[1]
+    url = f"http://127.0.0.1:{port}/?t=x"
+    server.viewer_file(repo).write_text(json.dumps({"token": "x", "port": port, "url": url, "pid": os.getpid()}))
+    monkeypatch.delenv("PORT", raising=False)
+    assert server.run(repo) is False
+    assert url in capsys.readouterr().out
+    monkeypatch.setenv("PORT", str(port))
+    assert server.run(repo) is False
+    monkeypatch.setenv("PORT", str(port + 1))
+    with pytest.raises(ScrivError, match="already running on port"):
+        server.run(repo)
+    held.close()
+
+
+def test_doctor_fails_only_on_missing_essentials(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from scrivmark import config
+    from scrivmark.cli import app
+
+    monkeypatch.setattr(config, "IDENTITY", tmp_path / "none.toml")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCRIVMARK_AS", "Barry W. Brook")
+    ok = CliRunner().invoke(app, ["doctor"])
+    assert ok.exit_code == 0 and "· repository" in ok.output
+    monkeypatch.delenv("SCRIVMARK_AS")
+    bad = CliRunner().invoke(app, ["doctor"])
+    assert bad.exit_code == 1 and "✗ identity" in bad.output
