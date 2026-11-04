@@ -448,7 +448,7 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
         for i in items:
             if i.get("draft"):
                 d = {"id": record.new_id("d"), "anchor": i["anchor"], "body": i["body"], "wording": i.get("wording"),
-                     "at": record.now()}
+                     "at": record.now(), "by": i.get("by")}
                 ds.append(d)
                 out.append(d)
             else:
@@ -548,12 +548,13 @@ def drafts(rv: Review) -> list[dict]:
     return [dict(d, where=resolve(rv, d["anchor"])) for d in read_json(rv.root / rv.drafts_rel, [])]
 
 
-def add_draft(rv: Review, anchor: dict, body: str, wording: str | None, expect: str | None = None) -> dict:
+def add_draft(rv: Review, anchor: dict, body: str, wording: str | None, expect: str | None = None,
+              by: str | None = None) -> dict:
     if rv.status != "open":
         raise ScrivError("Drafts belong to the reviewer, before the round is returned.")
     with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
         ds = read_json(rv.root / rv.drafts_rel, [])
-        d = {"id": record.new_id("d"), "anchor": anchor, "body": body, "wording": wording, "at": record.now()}
+        d = {"id": record.new_id("d"), "anchor": anchor, "body": body, "wording": wording, "at": record.now(), "by": by}
         ds.append(d)
         writes[rv.drafts_rel] = json.dumps(ds, indent=2, ensure_ascii=False)
     return d
@@ -602,6 +603,8 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
                 "id": record.new_id("t"), "status": "open", "anchor": anchor,
                 "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": body}],
             }
+            if d.get("by"):
+                t["messages"][0]["drafted_by"] = d["by"]
             rv.rec["threads"].append(t)
             writes[rv.record_rel] = record.dumps(rv.rec)
     return t

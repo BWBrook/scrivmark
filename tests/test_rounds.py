@@ -240,3 +240,12 @@ def test_batch_comments_are_all_or_none_and_source_comments_import(repo, tmp_pat
     assert rv.rec["threads"][-1]["messages"][0]["at"] != "2026-10-23"
     assert "reviews/" + rv.id + ".json" in review.summary(rv)["uncommitted"]
     assert review.source_comments(rv, "BWB") == []
+
+
+def test_drafts_record_which_agent_wrote_them(repo):
+    rv = rounds.start(repo)
+    d = review.add_draft(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaim?", None,
+                         by="Codex (gpt-6.1-terra)")
+    t = review.triage(review.active(repo), d["id"], True, "BWB")
+    assert t["messages"][0]["by"] == "BWB" and t["messages"][0]["drafted_by"] == "Codex (gpt-6.1-terra)"
+    record.validate(review.active(repo).rec)

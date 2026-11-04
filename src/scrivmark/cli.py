@@ -398,6 +398,8 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14.")] = None,
             draft: Annotated[bool, typer.Option(help="A draft for the reviewer to keep or drop (agents).")] = False,
             wording: Annotated[Optional[str], typer.Option(help="With --draft: replacement text to apply if kept.")] = None,
+            by: Annotated[Optional[str], typer.Option(help="With --draft: the agent and model drafting, e.g. 'Codex (gpt-6.1-terra)'. "
+                                                      "Default: $SCRIVMARK_AGENT.")] = None,
             from_: Annotated[Optional[str], typer.Option("--from", help="Add many at once from a JSON array or JSON Lines file ('-' for stdin): "
                              "objects with file, quote (or lines), optional prefix and suffix, body, and for drafts draft: true and optional wording. "
                              "All are added, or none.")] = None,
@@ -420,7 +422,8 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
                 anchor = _anchor(rv, d["file"], d.get("quote"), d.get("prefix", ""), d.get("suffix", ""), d.get("lines"))
             except ScrivError as e:
                 raise ScrivError(f"Item {n} ({d['file']}): {e}. Nothing was added.") from e
-            items.append({"anchor": anchor, "body": d["body"], "draft": bool(d.get("draft", draft)), "wording": d.get("wording")})
+            items.append({"anchor": anchor, "body": d["body"], "draft": bool(d.get("draft", draft)), "wording": d.get("wording"),
+                          **({"by": d.get("by") or by or os.environ.get("SCRIVMARK_AGENT")} if d.get("draft", draft) else {})})
         out = review.add_many(rv, items, _who(rv), expect)
         _emit(out, as_json, f"Added {len(out)}: " + ", ".join(x["id"] for x in out))
         return
@@ -428,7 +431,7 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
         raise ScrivError("Give FILE and --body, or --from a file of comments.")
     anchor = _anchor(rv, file, quote, prefix, suffix, lines)
     if draft:
-        d = review.add_draft(rv, anchor, body, wording, expect)
+        d = review.add_draft(rv, anchor, body, wording, expect, by or os.environ.get("SCRIVMARK_AGENT"))
         _emit(d, as_json, f"Draft {d['id']} added.")
     else:
         if wording is not None:

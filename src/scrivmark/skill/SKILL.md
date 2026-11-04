@@ -67,8 +67,11 @@ author: accept, reject, reply, resolve, edit.
   the quote is ambiguous, add `--prefix` or `--suffix`. Make one point per
   draft, and keep each to a sentence or three. The reviewer keeps drafts as
   their own (wording becomes a real edit) or drops them, so write what you
-  would be happy for them to sign. Do not add your own name or labels: the
-  round's statement already records that an agent helped.
+  would be happy for them to sign. Do not put your name or labels in the
+  text; instead pass `--by "Agent (model)"`, e.g. `--by "Codex (gpt-6.1-terra)"`
+  (or set `SCRIVMARK_AGENT`), so the card says who drafted it and the record
+  keeps it when the draft is kept. This matters when two agents give
+  separate opinions in one round.
   For more than two or three drafts, write them to a JSON file and add them
   in one go, which avoids shell quoting and adds all or none:
 

@@ -299,7 +299,7 @@ function threadCard(t) {
 
 function draftCard(d) {
   const c = el("div", { class: "card draft", tabindex: "-1" },
-    el("div", { class: "tag" }, "Draft from your agent"),
+    el("div", { class: "tag" }, d.by ? `Draft from ${d.by}` : "Draft from your agent"),
     quoteLine(d),
     el("div", { class: "msg" }, d.body),
     d.wording !== null ? el("div", { class: "wording", title: "Applied as an edit if kept" }, `→ ${d.wording || "(delete the passage)"}`) : null);
