@@ -149,6 +149,11 @@ function drawOther() {
 function editable() { return S.st.mode === "reviewer" || S.st.mode === "author"; }
 
 function decorate() {
+  for (const img of $$("img", doc)) {
+    img.classList.add("zoomable");
+    img.title = "Click to zoom";
+    img.addEventListener("click", e => { e.stopPropagation(); openZoom(img); });
+  }
   for (const a of $$('a[href^="#ref-"]', doc)) {
     const ref = document.getElementById(a.getAttribute("href").slice(1));
     if (ref) a.title = ref.textContent.trim().replace(/\s+/g, " ");
@@ -416,6 +421,40 @@ function editDraft(card, d, restoring = false) {
 async function setThread(id, status) {
   try { await api("/api/thread", { thread: id, status, rev: S.st.rev }); } catch (e) { fail(e); }
 }
+
+const zoombox = document.getElementById("zoombox"), zoomImg = zoombox.querySelector("img");
+let zoomScale = 1, zoomFit = true;
+
+function setZoom(scale, fit = false) {
+  zoomFit = fit;
+  const view = zoombox.querySelector(".zoomview");
+  const w = zoomImg.naturalWidth || 800, h = zoomImg.naturalHeight || 600;
+  zoomScale = fit ? Math.min(1, (view.clientWidth - 8) / w, (view.clientHeight - 8) / h) : Math.max(0.05, Math.min(8, scale));
+  zoomImg.style.width = `${Math.round(w * zoomScale)}px`;
+  zoombox.querySelector(".zoomlevel").textContent = `${Math.round(zoomScale * 100)}%`;
+}
+
+function openZoom(img) {
+  zoomImg.onload = () => setZoom(1, true);
+  zoomImg.src = img.currentSrc || img.src;
+  zoomImg.alt = img.alt;
+  zoombox.showModal();
+  if (zoomImg.complete && zoomImg.naturalWidth) setZoom(1, true);
+}
+
+zoombox.addEventListener("click", e => {
+  const z = e.target.dataset.z;
+  if (z === "in") setZoom(zoomScale * 1.25);
+  else if (z === "out") setZoom(zoomScale / 1.25);
+  else if (z === "fit") setZoom(1, true);
+  else if (z === "close" || e.target === zoombox) zoombox.close();
+});
+zoombox.addEventListener("keydown", e => {
+  if (e.key === "+" || e.key === "=") setZoom(zoomScale * 1.25);
+  else if (e.key === "-") setZoom(zoomScale / 1.25);
+  else if (e.key === "0") setZoom(1, true);
+});
+window.addEventListener("resize", () => { if (zoombox.open && zoomFit) setZoom(1, true); });
 
 function keepAllBar(drafts) {
   const edits = drafts.filter(d => d.wording !== null).length;

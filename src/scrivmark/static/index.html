@@ -34,6 +34,16 @@
   <button data-act="ask" title="Queue a question for your agent">Ask agent</button>
 </div>
 <div id="pop" hidden></div>
+<dialog id="zoombox" aria-label="Figure">
+  <div class="zoombar">
+    <button data-z="out" title="Zoom out (−)">−</button>
+    <button data-z="fit" title="Fit to window (0)">Fit</button>
+    <button data-z="in" title="Zoom in (+)">+</button>
+    <span class="zoomlevel"></span>
+    <button data-z="close" title="Close (Esc)">Close</button>
+  </div>
+  <div class="zoomview"><img alt=""></div>
+</dialog>
 <dialog id="helpbox">
   <h2>Working in scrivmark</h2>
   <ul>

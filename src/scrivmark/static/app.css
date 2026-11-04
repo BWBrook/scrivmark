@@ -117,7 +117,9 @@ mark.scrv-hl.resolved { background: transparent; border-bottom: 1px dotted var(-
 .scrv-title h1 { font-size: 1.6em !important; margin-top: 0 !important; }
 .scrv-author { color: var(--muted); margin-top: -.3em; }
 #doc figure { margin: 1.2em 0; text-align: center; }
-#doc figure img { max-width: 100%; height: auto; background: #fff; border-radius: 4px; }
+#doc img { max-width: 100%; height: auto; }
+#doc figure img { background: #fff; border-radius: 4px; }
+#doc img.zoomable { cursor: zoom-in; }
 #doc figcaption { font-size: .9em; color: var(--muted); margin-top: .4em; }
 #doc table { border-collapse: collapse; margin: 1em auto; font-size: .92em; }
 #doc caption { caption-side: top; font-size: .9em; color: var(--muted); padding-bottom: .4em; }
@@ -220,3 +222,13 @@ span.scrv-note::after { content: "⟩"; }
 .keepall { margin-top: 2.4em; padding-top: 1em; border-top: 1px dashed var(--rule); text-align: center;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .keepall button { margin-top: .5em; font-size: 15px; padding: 7px 16px; }
+
+#zoombox { max-width: none; width: 94vw; height: 92vh; padding: 0; display: none; flex-direction: column; overflow: hidden; }
+#zoombox[open] { display: flex; }
+#zoombox::backdrop { background: rgb(0 0 0 / .55); }
+.zoombar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--rule);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.zoombar [data-z="close"] { margin-left: auto; }
+.zoomlevel { color: var(--muted); font-size: 13px; min-width: 3.5em; }
+.zoomview { flex: 1; overflow: auto; padding: 4px; }
+.zoomview img { display: block; margin: auto; background: #fff; max-width: none; }
