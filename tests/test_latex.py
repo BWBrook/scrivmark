@@ -183,3 +183,15 @@ def test_tikz_and_pdf_figures_are_drawn_for_the_browser(texrepo):
     r = c.get(f"/png/tex/{key}.png")
     assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
     assert c.get("/png/../etc/passwd.png").status_code in (404, 200) and b"root:" not in c.get("/png/../etc/passwd.png").content
+
+
+def test_latex_cannot_pull_other_files_into_the_page(tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    body = (f"A \\lstinputlisting[language=C]{{{secret}}} B \\verbatiminput{{{secret}}} "
+            f"C \\input {secret} D \\input{{{secret}}} E")
+    root = tmp_path / "ms"
+    root.mkdir()
+    (root / "m.tex").write_text(f"\\documentclass{{article}}\n\\begin{{document}}\n{body}\n\\end{{document}}\n")
+    html, _ = render.render(root, config.Manuscript(root, ["m.tex"]))
+    assert "TOPSECRET" not in html

@@ -97,6 +97,13 @@ end
 local function prepare(src)
   src = uncomment(src)
   src = src:gsub("\\input%s*%b{}", ""):gsub("\\include%s*%b{}", ""):gsub("\\subfile%s*%b{}", "")
+  src = src:gsub("\\input%s+[^%s{}\\]+", "")
+  -- the manuscript must not pull other files into the page
+  for _, cmd in ipairs({ "lstinputlisting", "verbatiminput", "VerbatimInput", "inputminted", "includepdf" }) do
+    src = src:gsub("\\" .. cmd .. "%s*%b[]", "\\" .. cmd):gsub("\\" .. cmd .. "%s*%b{}%s*%b{}", function(m)
+      return cmd == "inputminted" and "\\texttt{[file listing]}" or nil
+    end):gsub("\\" .. cmd .. "%s*(%b{})", function(arg) return "\\texttt{[file " .. arg:sub(2, -2) .. "]}" end)
+  end
   -- older pandoc reads \cref as \ref; keep the difference in the label
   src = src:gsub("\\[cC]ref%s*{", "\\ref{scrvcref:"):gsub("\\autoref%s*{", "\\ref{scrvcref:")
   return tikz(src)
@@ -173,7 +180,7 @@ local function only_notes(para)
 end
 
 local function read(src)
-  local ok, doc = pcall(pandoc.read, defs .. "\n" .. prepare(src), "latex")
+  local ok, doc = pcall(pandoc.read, defs .. "\n" .. prepare(src), "latex", nil, {})
   if not ok then
     return { pandoc.CodeBlock(src, { class = "latex" }) }
   end
