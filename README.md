@@ -47,6 +47,18 @@ To let Claude Code or Codex help, install the agent guide once:
 scrivmark skill --install
 ```
 
+## See a finished round
+
+[scrivmark-tutorial-example](https://github.com/BWBrook/scrivmark-tutorial-example)
+is the tutorial manuscript after one complete round, on 3–4 November 2026.
+Barry W. Brook reviewed it with Claude, which answered his asks as he read.
+Claude then played the fictional author: it accepted 17 of the 19 tracked
+changes, rejected 2 with reasons, and answered all 11 comments with replies
+and revisions. Clone it to step through the round in the viewer. This is what
+the author saw on opening it:
+
+![The returned round in the author's view: tracked changes inline, the reviewer's comments in the margin](docs/img/example-round.png)
+
 ## On your own manuscript
 
 ```bash

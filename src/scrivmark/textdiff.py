@@ -167,6 +167,7 @@ class Projection:
     def __init__(self, old: str, new: str):
         self.identity = old == new
         self.old_len = len(old)
+        self.new_len = len(new)
         self.runs: list[tuple[int, int, int]] = []
         self.starts: list[int] = []
         if self.identity:
@@ -203,6 +204,26 @@ class Projection:
         if oa <= s and e <= oa + n:
             return na + (s - oa), na + (e - oa)
         return None
+
+    def around(self, s: int, e: int, solid: int = 12, slack: int = 80) -> tuple[int, int] | None:
+        """Where [s, e) went if it was rewritten: the new text between the
+        nearest unchanged stretches of at least `solid` characters on either
+        side, provided each lies within `slack` characters of the passage. The
+        start and end of the file count as unchanged."""
+        if self.identity:
+            return s, e
+        left = 0 if s <= slack else None
+        right = self.new_len if self.old_len - e <= slack else None
+        for oa, na, n in self.runs:
+            if n < solid:
+                continue
+            if oa < s and oa + n >= s - slack:
+                left = na + min(n, s - oa)
+            if oa + n > e and oa <= e + slack and (right is None or right == self.new_len):
+                right = na + max(0, e - oa)
+        if left is None or right is None or left >= right:
+            return None
+        return left, right
 
     def point(self, p: int, margin: int = 8) -> int | None:
         """Project an insertion point whose surroundings are unchanged."""

@@ -57,3 +57,17 @@ def test_selection_is_exact_or_refused():
     assert src[s:e] == "First words [@smith] last words"
     assert map_selection(src, "First words (Smith, Johnson, and Williams 2020) last words") is None
     assert map_selection("one two. one two.\n", "one two") is None
+
+
+def test_projection_follows_a_rewritten_passage_but_not_a_deleted_one():
+    from scrivmark.textdiff import Projection
+
+    old = ("The introduction stays exactly as it was here. It proves that wombats prefer sunny burrows.[^data]\n\n"
+           "[^data]: Invented numbers for the tutorial.\n")
+    s = old.index("proves")
+    e = old.index("[^data]")
+    new = old.replace("It proves that wombats prefer sunny burrows.", "Occupancy is higher on sunny aspects.")
+    r = Projection(old, new).around(s, e)
+    assert r and new[r[0]:r[1]] == "Occupancy is higher on sunny aspects."
+    gone = old.replace(" It proves that wombats prefer sunny burrows.", "")
+    assert Projection(old, gone).around(s, e) is None

@@ -366,7 +366,9 @@ def resolve(rv: Review, a: dict) -> dict:
     """Locate an anchor in the current text.
 
     ok, exact   the passage is where it was, unchanged;
-    ok, edited  its surroundings are intact and the passage itself was edited;
+    ok, edited  its surroundings are intact and the passage itself was edited,
+                or it was rewritten and solid context survives close by on
+                both sides (the thread follows the new text);
     ok, moved   it is no longer where it was, but occurs once elsewhere with
                 its full original context;
     orphan      none of these holds. A lookalike passage elsewhere is listed
@@ -386,6 +388,9 @@ def resolve(rv: Review, a: dict) -> dict:
         right = pr.range(e, min(len(old), e + 16))
         if left and right and left[1] <= right[0]:
             return {"state": "ok", "how": "edited", "edited": True, "range": [left[1], right[0]]}
+        near = pr.around(s, e)
+        if near:
+            return {"state": "ok", "how": "edited", "edited": True, "range": list(near)}
     hits = _occurrences(cur, a["exact"])
     full = len(a["prefix"]) + len(a["suffix"])
     whole = [i for i in hits if _context_score(cur, i, a) == full]
