@@ -216,3 +216,7 @@ div.scrv-note { border-left: 3px dashed var(--rule); padding: 2px 0 2px 12px; ma
 div.scrv-note::before { content: "Comment in the source (not printed)"; display: block; font-size: .8em; font-style: italic; }
 span.scrv-note::before { content: "⟨comment: "; }
 span.scrv-note::after { content: "⟩"; }
+
+.keepall { margin-top: 2.4em; padding-top: 1em; border-top: 1px dashed var(--rule); text-align: center;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.keepall button { margin-top: .5em; font-size: 15px; padding: 7px 16px; }

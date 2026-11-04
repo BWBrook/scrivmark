@@ -91,6 +91,7 @@ function draw() {
   stmt.hidden = !(r && st.mode !== "reviewer");
   if (r) stmt.textContent = r.statement;
   doc.innerHTML = st.html;
+  if (st.mode === "reviewer" && st.drafts.length) doc.append(keepAllBar(st.drafts));
   decorate();
   drawOther();
   drawCounts();
@@ -414,6 +415,21 @@ function editDraft(card, d, restoring = false) {
 
 async function setThread(id, status) {
   try { await api("/api/thread", { thread: id, status, rev: S.st.rev }); } catch (e) { fail(e); }
+}
+
+function keepAllBar(drafts) {
+  const edits = drafts.filter(d => d.wording !== null).length;
+  const what = `${drafts.length} draft${drafts.length === 1 ? "" : "s"}` + (edits ? `, applying ${edits} edit${edits === 1 ? "" : "s"}` : "");
+  const go = async () => {
+    if (!confirm(`Keep all ${what}? Drafts become your comments, and edits become your tracked changes. Any you want back can be undone like any other edit or comment.`)) return;
+    try {
+      const r = await api("/api/draft", { action: "keep_all" });
+      notice(`Kept ${r.kept.length}.` + (r.left.length ? ` ${r.left.length} left for you: their passage changed, so edit or drop them.` : ""), 8000);
+    } catch (e) { fail(e); }
+  };
+  return el("div", { class: "keepall" },
+    el("div", { class: "muted small" }, "Done with the ones you wanted to change or drop?"),
+    el("button", { class: "primary", onclick: go }, `Keep all ${what}`));
 }
 
 async function triage(id, action, body, wording) {

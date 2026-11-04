@@ -560,6 +560,26 @@ def add_draft(rv: Review, anchor: dict, body: str, wording: str | None, expect: 
     return d
 
 
+def keep_all(rv: Review, who: str) -> dict:
+    """Keep every draft, in document order. A draft whose wording can no longer
+    be applied (its passage changed, perhaps by an earlier draft) stays for the
+    reviewer to edit or drop."""
+    order = {f: i for i, f in enumerate(rv.ms.sources)}
+
+    def place(d):
+        w = resolve(rv, d["anchor"])
+        return (order.get(d["anchor"]["file"], len(order)), w["range"][0] if w["state"] == "ok" else 0)
+
+    kept, left = [], []
+    for d in sorted(drafts(rv), key=place):
+        try:
+            triage(rv, d["id"], True, who)
+            kept.append(d["id"])
+        except Conflict as e:
+            left.append({"id": d["id"], "reason": str(e)})
+    return {"kept": kept, "left": left}
+
+
 def _apply_wording(rv: Review, anchor: dict, wording: str, writes: dict, refusal: str) -> dict:
     """Replace the anchored text with `wording` as a real edit, only while that
     text is exactly as quoted; returns the anchor of the new text."""

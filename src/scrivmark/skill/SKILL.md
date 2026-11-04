@@ -97,6 +97,9 @@ author: accept, reject, reply, resolve, edit.
   opens "Name, YYYY-MM-DD" is signed by that name, others by the reviewer;
   the dry run shows who signs each. The comments stay in the source for the
   author to remove.
+- **Keeping in bulk.** The viewer has a "Keep all drafts" button at the end of
+  the document; `scrivmark keep --all` does the same. Drafts whose passage has
+  changed are left for the reviewer. Use it only when the reviewer asks.
 - **"Look at my selection."** Run `scrivmark selection --json`. It gives the
   file, lines and exact source text the human has selected. If `stale` is
   true, say so and ask them to reselect.

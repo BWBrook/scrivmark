@@ -324,6 +324,8 @@ def build_app(viewer: Viewer) -> Starlette:
     async def triage(request: Request):
         b = await body_of(request)
         rv = viewer.need()
+        if b.get("action") == "keep_all":
+            return JSONResponse(review.keep_all(rv, viewer.who(rv)))
         t = review.triage(rv, b["draft"], b["action"] == "keep", viewer.who(rv), b.get("body"),
                           b.get("wording"), b.get("rev"))
         return JSONResponse(t or {})

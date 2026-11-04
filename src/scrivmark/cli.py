@@ -511,9 +511,18 @@ def drafts_(as_json: Json = False):
 
 
 @app.command()
-def keep(draft_ids: list[str], as_json: Json = False):
+def keep(draft_ids: Annotated[Optional[list[str]], typer.Argument()] = None,
+         all_: Annotated[bool, typer.Option("--all", help="Keep every draft, in document order.")] = False,
+         as_json: Json = False):
     """Keep drafts as your own comments, applying any proposed wording."""
     rv = review.active(_root())
+    if all_:
+        out = review.keep_all(rv, _who(rv))
+        _emit(out, as_json, f"Kept {len(out['kept'])} drafts." + "".join(
+            f"\nLeft {x['id']}: {x['reason']}" for x in out["left"]))
+        return
+    if not draft_ids:
+        raise ScrivError("Name the drafts to keep, or pass --all.")
     out = [review.triage(rv, did, True, _who(rv)) for did in draft_ids]
     _emit(out, as_json, "\n".join(f"kept {d}" for d in draft_ids))
 

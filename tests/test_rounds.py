@@ -268,3 +268,17 @@ def test_wording_only_drafts_apply_as_edits_without_a_thread(repo, tmp_path):
     rec = review.active(repo).rec
     record.validate(rec)
     assert rec["drafted_edits"][0]["by"] == "Codex (gpt-6.1-terra)" and rec["drafted_edits"][0]["was"] == "should should"
+
+
+def test_keep_all_applies_every_draft_and_leaves_conflicts(repo):
+    rv = rounds.start(repo)
+    a = review.anchor_quote(rv, "paper.md", "should should")
+    review.add_draft(rv, a, "", "should", by="Codex")
+    review.add_draft(rv, a, "Also here", "should", by="Claude")
+    review.add_draft(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaim?", None)
+    out = review.keep_all(review.active(repo), "BWB")
+    assert len(out["kept"]) == 2 and len(out["left"]) == 1
+    rv = review.active(repo)
+    assert "should should" not in (repo / "paper.md").read_text() and len(review.drafts(rv)) == 1
+    assert [t["messages"][0]["body"] for t in rv.rec["threads"]] == ["Overclaim?"]
+    assert rv.rec["drafted_edits"][0]["by"] == "Codex"
