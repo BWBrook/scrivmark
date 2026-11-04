@@ -22,9 +22,11 @@ This guide is loaded when your session starts. If scrivmark was upgraded since,
 
 ## The viewer
 
-If the repository has a `.claude/launch.json` entry for `scrivmark serve`,
-let the browser pane start the viewer from it, and do not start one yourself.
-Otherwise start it in the background with `scrivmark serve`. It listens on
+If the repository has a `.claude/launch.json` entry for `scrivmark serve` and
+you can show the browser pane, let the pane start the viewer from it. If you
+cannot (no launcher, or the human is away from the window, say on a phone),
+start it yourself in the background with `scrivmark serve`; a later pane
+launch finds it and reuses it. It listens on
 port 8765 (or `--port`, then `$PORT` from a launcher, then `[viewer] port` in
 `scrivmark.toml`), keeps the same address across restarts, and
 `http://localhost:8765` opens it directly on this machine. Only one viewer
@@ -67,6 +69,22 @@ author: accept, reject, reply, resolve, edit.
   their own (wording becomes a real edit) or drops them, so write what you
   would be happy for them to sign. Do not add your own name or labels: the
   round's statement already records that an agent helped.
+  For more than two or three drafts, write them to a JSON file and add them
+  in one go, which avoids shell quoting and adds all or none:
+
+  ```bash
+  scrivmark comment --from drafts.json --draft
+  # drafts.json: [{"file": "paper.md", "quote": "...", "body": "...", "wording": "..."}, ...]
+  ```
+
+  (`prefix`, `suffix` and `lines` work as on the command line; JSON Lines and
+  `--from -` for stdin also work.)
+- **Comments left in the source.** If the Markdown carries `<!-- ... -->`
+  comments from an earlier review, they show as grey notes but are not
+  threads. `scrivmark import-comments --dry-run` lists them; at the start of a
+  round, offer to run `scrivmark import-comments`, which makes each an open
+  thread anchored to it so it can be replied to and resolved. The comments
+  stay in the source for the author to remove.
 - **"Look at my selection."** Run `scrivmark selection --json`. It gives the
   file, lines and exact source text the human has selected. If `stale` is
   true, say so and ask them to reselect.

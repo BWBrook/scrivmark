@@ -86,7 +86,7 @@ function draw() {
   $("#mode").className = `badge ${st.mode}`;
   const r = st.round;
   const who = st.me ? ` · you are ${st.me}` : "";
-  $("#roundid").textContent = r ? `${r.id} · ${st.mode === "author" ? "from " + r.reviewer.name : "on " + r.author_branch}${who}` : st.branch;
+  $("#roundid").textContent = r ? `${r.id} · ${st.mode === "author" ? "from " + r.reviewer.name : "reviewing " + r.author_branch}${who}` : st.branch;
   const stmt = $("#statement");
   stmt.hidden = !(r && st.mode !== "reviewer");
   if (r) stmt.textContent = r.statement;

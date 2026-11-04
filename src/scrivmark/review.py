@@ -434,6 +434,54 @@ def comment(rv: Review, anchor: dict, body: str, who: str, expect: str | None = 
     return t
 
 
+def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None) -> list[dict]:
+    """Add several comments and drafts at once, all or none. Each item has an
+    `anchor` and `body`, and for drafts `draft: true` and optional `wording`."""
+    if rv.status == "closed":
+        raise ScrivError("This round is closed.")
+    if any(i.get("draft") for i in items) and rv.status != "open":
+        raise ScrivError("Drafts belong to the reviewer, before the round is returned.")
+    out = []
+    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+        rv.reload()
+        ds = read_json(rv.root / rv.drafts_rel, [])
+        for i in items:
+            if i.get("draft"):
+                d = {"id": record.new_id("d"), "anchor": i["anchor"], "body": i["body"], "wording": i.get("wording"),
+                     "at": record.now()}
+                ds.append(d)
+                out.append(d)
+            else:
+                t = {"id": record.new_id("t"), "status": "open", "anchor": i["anchor"],
+                     "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": i["body"]}]}
+                rv.rec["threads"].append(t)
+                out.append(t)
+        writes[rv.record_rel] = record.dumps(rv.rec)
+        if any(i.get("draft") for i in items):
+            writes[rv.drafts_rel] = json.dumps(ds, indent=2, ensure_ascii=False)
+    return out
+
+
+HTML_COMMENT = re.compile(r"<!--(.*?)-->", re.S)
+
+
+def source_comments(rv: Review) -> list[dict]:
+    """HTML comments in the Markdown sources that no thread is anchored to yet,
+    as items for add_many."""
+    taken = {(t["anchor"]["file"], t["anchor"]["exact"]) for t in rv.rec["threads"]}
+    out = []
+    for rel in rv.ms.files:
+        if latex.is_tex(rel):
+            continue
+        text = rv.text(rel) or ""
+        for m in HTML_COMMENT.finditer(text):
+            body = m.group(1).strip()
+            if body and (rel, m.group(0)) not in taken:
+                out.append({"anchor": anchor_at(rv, rel, m.start(), m.end()),
+                            "body": f"From a comment in the source:\n\n{body}", "line": text.count("\n", 0, m.start()) + 1})
+    return out
+
+
 def reply(rv: Review, tid: str, body: str, who: str, expect: str | None = None) -> dict:
     with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
         rv.reload()

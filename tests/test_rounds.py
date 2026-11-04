@@ -206,3 +206,30 @@ def test_an_orphaned_thread_can_be_reattached(repo):
     review.reattach(rv, t["id"], review.anchor_quote(rv, "paper.md", "Something else entirely"))
     th = review.threads(rv)[0]
     assert th["where"]["state"] == "ok" and " ".join(th["anchor"]["was"].split()) == "thermal benefits drive"
+
+
+def test_batch_comments_are_all_or_none_and_source_comments_import(repo, tmp_path):
+    rv = rounds.start(repo)
+    good = {"file": "paper.md", "quote": "thermal benefits", "body": "It's a \"claim\" | (check)", "draft": True,
+            "wording": "thermal effects"}
+    bad = {"file": "paper.md", "quote": "no such text anywhere", "body": "x"}
+    from typer.testing import CliRunner
+
+    from scrivmark.cli import app
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps([good, bad]))
+    r = CliRunner().invoke(app, ["comment", "--from", str(f)])
+    assert r.exit_code != 0 and review.drafts(review.active(repo)) == []
+    f.write_text(json.dumps(good) + "\n" + json.dumps({"file": "paper.md", "quote": "dig burrows", "body": "Hm."}) + "\n")
+    r = CliRunner().invoke(app, ["comment", "--from", str(f)])
+    assert r.exit_code == 0, r.output
+    rv = review.active(repo)
+    assert review.drafts(rv)[0]["body"] == good["body"] and len(rv.rec["threads"]) == 1
+    edit(repo, "# Methods", "<!-- Old review [R1]: tighten the methods -->\n\n# Methods")
+    git(repo, "commit", "-qam", "reviewer keeps an old note")
+    assert len(review.source_comments(review.active(repo))) == 1
+    r = CliRunner().invoke(app, ["import-comments"])
+    assert r.exit_code == 0 and "Imported 1" in r.output
+    rv = review.active(repo)
+    assert rv.rec["threads"][-1]["anchor"]["exact"].startswith("<!-- Old review")
+    assert review.source_comments(rv) == []

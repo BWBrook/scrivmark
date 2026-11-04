@@ -388,17 +388,42 @@ def _anchor(rv, file: str, quote: str | None, prefix: str, suffix: str, lines: s
 
 
 @app.command()
-def comment(file: str,
-            body: Annotated[str, typer.Option(help="The comment.")],
+def comment(file: Annotated[Optional[str], typer.Argument()] = None,
+            body: Annotated[Optional[str], typer.Option(help="The comment.")] = None,
             quote: Annotated[Optional[str], typer.Option(help="Exact source text the comment is about.")] = None,
             prefix: Annotated[str, typer.Option(help="Text just before the quote, to pick one occurrence.")] = "",
             suffix: Annotated[str, typer.Option(help="Text just after the quote.")] = "",
             lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14.")] = None,
             draft: Annotated[bool, typer.Option(help="A draft for the reviewer to keep or drop (agents).")] = False,
             wording: Annotated[Optional[str], typer.Option(help="With --draft: replacement text to apply if kept.")] = None,
+            from_: Annotated[Optional[str], typer.Option("--from", help="Add many at once from a JSON array or JSON Lines file ('-' for stdin): "
+                             "objects with file, quote (or lines), optional prefix and suffix, body, and for drafts draft: true and optional wording. "
+                             "All are added, or none.")] = None,
             expect: Expect = None, as_json: Json = False):
     """Add a comment anchored to source text."""
     rv = review.active(_root())
+    if from_:
+        raw = sys.stdin.read() if from_ == "-" else Path(from_).read_text()
+        try:
+            data = json.loads(raw) if raw.lstrip().startswith("[") else [json.loads(x) for x in raw.splitlines() if x.strip()]
+        except json.JSONDecodeError as e:
+            raise ScrivError(f"--from is not valid JSON or JSON Lines: {e}") from e
+        items = []
+        for n, d in enumerate(data, 1):
+            if not isinstance(d, dict) or not d.get("file") or not d.get("body"):
+                raise ScrivError(f"Item {n} needs at least file and body.")
+            if d.get("wording") is not None and not (d.get("draft") or draft):
+                raise ScrivError(f"Item {n}: wording applies to drafts.")
+            try:
+                anchor = _anchor(rv, d["file"], d.get("quote"), d.get("prefix", ""), d.get("suffix", ""), d.get("lines"))
+            except ScrivError as e:
+                raise ScrivError(f"Item {n} ({d['file']}): {e}. Nothing was added.") from e
+            items.append({"anchor": anchor, "body": d["body"], "draft": bool(d.get("draft", draft)), "wording": d.get("wording")})
+        out = review.add_many(rv, items, _who(rv), expect)
+        _emit(out, as_json, f"Added {len(out)}: " + ", ".join(x["id"] for x in out))
+        return
+    if not file or not body:
+        raise ScrivError("Give FILE and --body, or --from a file of comments.")
     anchor = _anchor(rv, file, quote, prefix, suffix, lines)
     if draft:
         d = review.add_draft(rv, anchor, body, wording, expect)
@@ -408,6 +433,22 @@ def comment(file: str,
             raise ScrivError("--wording applies to drafts; to change the text, edit the file.")
         t = review.comment(rv, anchor, body, _who(rv), expect)
         _emit(t, as_json, f"Comment {t['id']} added.")
+
+
+@app.command("import-comments")
+def import_comments(dry_run: Annotated[bool, typer.Option("--dry-run", help="List what would be imported.")] = False,
+                    expect: Expect = None, as_json: Json = False):
+    """Turn HTML comments left in the Markdown (<!-- ... -->, say from an earlier
+    review) into open threads anchored to them. The comments stay in the source."""
+    rv = review.active(_root())
+    found = review.source_comments(rv)
+    if dry_run or not found:
+        _emit([{"file": i["anchor"]["file"], "line": i["line"], "body": i["body"]} for i in found], as_json,
+              "\n".join(f"{i['anchor']['file']}:{i['line']}  {i['body'].splitlines()[-1][:70]}" for i in found)
+              or "No source comments to import.")
+        return
+    out = review.add_many(rv, found, _who(rv), expect)
+    _emit(out, as_json, f"Imported {len(out)} source comments as threads.")
 
 
 @app.command()
