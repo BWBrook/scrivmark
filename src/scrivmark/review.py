@@ -453,7 +453,7 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
                 out.append(d)
             else:
                 t = {"id": record.new_id("t"), "status": "open", "anchor": i["anchor"],
-                     "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": i["body"]}]}
+                     "messages": [{"id": record.new_id("m"), "by": i.get("by", who), "at": record.now(), "body": i["body"]}]}
                 rv.rec["threads"].append(t)
                 out.append(t)
         writes[rv.record_rel] = record.dumps(rv.rec)
@@ -463,11 +463,13 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
 
 
 HTML_COMMENT = re.compile(r"<!--(.*?)-->", re.S)
+SIGNED = re.compile(r"^\s*([A-Z][\w.' -]{0,40}?),\s*\d{4}-\d{2}-\d{2}\b")
 
 
-def source_comments(rv: Review) -> list[dict]:
+def source_comments(rv: Review, importer: str) -> list[dict]:
     """HTML comments in the Markdown sources that no thread is anchored to yet,
-    as items for add_many."""
+    as items for add_many. A comment that opens "Name, YYYY-MM-DD" is signed by
+    that name; others by the importer."""
     taken = {(t["anchor"]["file"], t["anchor"]["exact"]) for t in rv.rec["threads"]}
     out = []
     for rel in rv.ms.files:
@@ -477,8 +479,11 @@ def source_comments(rv: Review) -> list[dict]:
         for m in HTML_COMMENT.finditer(text):
             body = m.group(1).strip()
             if body and (rel, m.group(0)) not in taken:
+                signed = SIGNED.match(body)
                 out.append({"anchor": anchor_at(rv, rel, m.start(), m.end()),
-                            "body": f"From a comment in the source:\n\n{body}", "line": text.count("\n", 0, m.start()) + 1})
+                            "by": signed.group(1).strip() if signed else importer,
+                            "body": f"{body}\n\n(Imported by {importer} from a comment in the source.)",
+                            "line": text.count("\n", 0, m.start()) + 1})
     return out
 
 

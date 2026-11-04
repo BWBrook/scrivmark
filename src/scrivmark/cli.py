@@ -439,12 +439,14 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
 def import_comments(dry_run: Annotated[bool, typer.Option("--dry-run", help="List what would be imported.")] = False,
                     expect: Expect = None, as_json: Json = False):
     """Turn HTML comments left in the Markdown (<!-- ... -->, say from an earlier
-    review) into open threads anchored to them. The comments stay in the source."""
+    review) into open threads anchored to them, signed by the name a comment
+    opens with ("Name, YYYY-MM-DD ...") or else by you. The comments stay in
+    the source."""
     rv = review.active(_root())
-    found = review.source_comments(rv)
+    found = review.source_comments(rv, _who(rv))
     if dry_run or not found:
-        _emit([{"file": i["anchor"]["file"], "line": i["line"], "body": i["body"]} for i in found], as_json,
-              "\n".join(f"{i['anchor']['file']}:{i['line']}  {i['body'].splitlines()[-1][:70]}" for i in found)
+        _emit([{"file": i["anchor"]["file"], "line": i["line"], "by": i["by"], "body": i["body"]} for i in found], as_json,
+              "\n".join(f"{i['anchor']['file']}:{i['line']}  signed {i['by']}: {i['body'].splitlines()[0][:70]}" for i in found)
               or "No source comments to import.")
         return
     out = review.add_many(rv, found, _who(rv), expect)

@@ -83,8 +83,10 @@ author: accept, reject, reply, resolve, edit.
   comments from an earlier review, they show as grey notes but are not
   threads. `scrivmark import-comments --dry-run` lists them; at the start of a
   round, offer to run `scrivmark import-comments`, which makes each an open
-  thread anchored to it so it can be replied to and resolved. The comments
-  stay in the source for the author to remove.
+  thread anchored to it so it can be replied to and resolved. A comment that
+  opens "Name, YYYY-MM-DD" is signed by that name, others by the reviewer;
+  the dry run shows who signs each. The comments stay in the source for the
+  author to remove.
 - **"Look at my selection."** Run `scrivmark selection --json`. It gives the
   file, lines and exact source text the human has selected. If `stale` is
   true, say so and ask them to reselect.

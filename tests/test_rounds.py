@@ -225,11 +225,15 @@ def test_batch_comments_are_all_or_none_and_source_comments_import(repo, tmp_pat
     assert r.exit_code == 0, r.output
     rv = review.active(repo)
     assert review.drafts(rv)[0]["body"] == good["body"] and len(rv.rec["threads"]) == 1
-    edit(repo, "# Methods", "<!-- Old review [R1]: tighten the methods -->\n\n# Methods")
+    edit(repo, "# Methods", "<!-- Codex, 2026-10-23 [R1 — Methods]\ntighten the methods -->\n\n"
+         "<!-- unsigned note -->\n\n# Methods")
     git(repo, "commit", "-qam", "reviewer keeps an old note")
-    assert len(review.source_comments(review.active(repo))) == 1
+    r = CliRunner().invoke(app, ["import-comments", "--dry-run"])
+    assert "signed Codex: Codex, 2026-10-23 [R1 — Methods]" in r.output and "signed BWB: unsigned note" in r.output
     r = CliRunner().invoke(app, ["import-comments"])
-    assert r.exit_code == 0 and "Imported 1" in r.output
+    assert r.exit_code == 0 and "Imported 2" in r.output
     rv = review.active(repo)
-    assert rv.rec["threads"][-1]["anchor"]["exact"].startswith("<!-- Old review")
-    assert review.source_comments(rv) == []
+    first = rv.rec["threads"][-2]
+    assert first["anchor"]["exact"].startswith("<!-- Codex")
+    assert first["messages"][0]["by"] == "Codex" and first["messages"][0]["body"].startswith("Codex, 2026-10-23 [R1")
+    assert review.source_comments(rv, "BWB") == []
