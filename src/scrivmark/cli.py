@@ -400,6 +400,9 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             wording: Annotated[Optional[str], typer.Option(help="With --draft: replacement text to apply if kept.")] = None,
             by: Annotated[Optional[str], typer.Option(help="With --draft: the agent and model drafting, e.g. 'Codex (gpt-6.1-terra)'. "
                                                       "Default: $SCRIVMARK_AGENT.")] = None,
+            dry_run: Annotated[bool, typer.Option("--dry-run", help="Check where each would land, show wording in context and "
+                                                  "overlaps with other items, drafts, threads and source comments; add nothing.")] = False,
+            summary: Annotated[bool, typer.Option("--summary", help="With --json and --from: only the count, ids and authors.")] = False,
             from_: Annotated[Optional[str], typer.Option("--from", help="Add many at once from a JSON array or JSON Lines file ('-' for stdin): "
                              "objects with file, quote (or lines), optional prefix and suffix, body, and for drafts draft: true and optional wording. "
                              "All are added, or none.")] = None,
@@ -412,22 +415,53 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             data = json.loads(raw) if raw.lstrip().startswith("[") else [json.loads(x) for x in raw.splitlines() if x.strip()]
         except json.JSONDecodeError as e:
             raise ScrivError(f"--from is not valid JSON or JSON Lines: {e}") from e
-        items = []
+        items, errors = [], []
         for n, d in enumerate(data, 1):
             is_draft = bool(d.get("draft", draft)) if isinstance(d, dict) else False
             if not isinstance(d, dict) or not d.get("file") or not (d.get("body") or (is_draft and d.get("wording") is not None)):
-                raise ScrivError(f"Item {n} needs file and body (a draft with wording may leave body empty).")
-            if d.get("wording") is not None and not (d.get("draft") or draft):
-                raise ScrivError(f"Item {n}: wording applies to drafts.")
+                errors.append({"item": n, "error": "needs file and body (a draft with wording may leave body empty)"})
+                continue
+            if d.get("wording") is not None and not is_draft:
+                errors.append({"item": n, "file": d["file"], "error": "wording applies to drafts"})
+                continue
             try:
                 anchor = _anchor(rv, d["file"], d.get("quote"), d.get("prefix", ""), d.get("suffix", ""), d.get("lines"))
             except ScrivError as e:
-                raise ScrivError(f"Item {n} ({d['file']}): {e}. Nothing was added.") from e
-            items.append({"anchor": anchor, "body": d.get("body") or "", "draft": bool(d.get("draft", draft)), "wording": d.get("wording"),
-                          **({"by": d.get("by") or by or os.environ.get("SCRIVMARK_AGENT")} if d.get("draft", draft) else {})})
+                errors.append({"item": n, "file": d["file"], "quote": d.get("quote"), "error": str(e)})
+                continue
+            items.append({"anchor": anchor, "body": d.get("body") or "", "draft": is_draft, "wording": d.get("wording"),
+                          **({"by": d.get("by") or by or os.environ.get("SCRIVMARK_AGENT")} if is_draft else {})})
+        if dry_run:
+            checked = review.preflight(rv, items)
+            report = {"ok": not errors, "items": len(data), "errors": errors, "checked": checked,
+                      "overlapping": sum(1 for c in checked if c["overlaps"])}
+            lines = [f"{len(data)} items: {len(errors)} would fail, {report['overlapping']} overlap something (advisory)."]
+            lines += [f"✗ item {x['item']}: {x['error']}" for x in errors]
+            for c in checked:
+                lines.append(f"{c['item']}. {c['file']}:{c['line']}" + (f"  overlaps {', '.join(c['overlaps'])}" if c["overlaps"] else ""))
+                lines.append(f"   {c['before']}")
+                if "after" in c:
+                    lines.append(f"   → {c['after']}")
+            _emit(report, as_json, "\n".join(lines))
+            if errors:
+                raise typer.Exit(1)
+            return
+        if errors:
+            first = errors[0]
+            raise ScrivError(f"Item {first['item']}" + (f" ({first['file']})" if first.get("file") else "")
+                             + f": {first['error']}. Nothing was added." + (f" ({len(errors)} items have problems; "
+                             "--dry-run lists them all.)" if len(errors) > 1 else ""))
         out = review.add_many(rv, items, _who(rv), expect)
+        if summary:
+            out = {"count": len(out), "ids": [x["id"] for x in out],
+                   "by": sorted({x.get("by") or x.get("messages", [{}])[0].get("by") or "" for x in out} - {""}),
+                   "rev": review.active(_root()).rev()}
+            _emit(out, as_json, f"Added {out['count']}: " + ", ".join(out["ids"]))
+            return
         _emit(out, as_json, f"Added {len(out)}: " + ", ".join(x["id"] for x in out))
         return
+    if dry_run:
+        raise ScrivError("--dry-run checks a batch: use it with --from.")
     if not file or not (body or (draft and wording is not None)):
         raise ScrivError("Give FILE and --body (a draft with --wording may omit it), or --from a file of comments.")
     body = body or ""
@@ -440,6 +474,22 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             raise ScrivError("--wording applies to drafts; to change the text, edit the file.")
         t = review.comment(rv, anchor, body, _who(rv), expect)
         _emit(t, as_json, f"Comment {t['id']} added.")
+
+
+@app.command()
+def revise(draft_id: str,
+           body: Annotated[Optional[str], typer.Option(help="New comment text.")] = None,
+           wording: Annotated[Optional[str], typer.Option(help="New replacement text.")] = None,
+           clear_wording: Annotated[bool, typer.Option("--clear-wording", help="Make it a comment with no edit.")] = False,
+           by: Annotated[Optional[str], typer.Option(help="Who is revising, if not the draft's author. Default: $SCRIVMARK_AGENT.")] = None,
+           expect: Expect = None, as_json: Json = False):
+    """Amend a draft's body or wording in place. It keeps its author; earlier
+    versions are kept as its history."""
+    if body is None and wording is None and not clear_wording:
+        raise ScrivError("Give --body, --wording or --clear-wording.")
+    rv = review.active(_root())
+    d = review.revise_draft(rv, draft_id, body, wording, clear_wording, by or os.environ.get("SCRIVMARK_AGENT"), expect)
+    _emit(d, as_json, f"Revised {d['id']} (version {len(d['history']) + 1}).")
 
 
 @app.command("import-comments")

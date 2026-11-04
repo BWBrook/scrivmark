@@ -81,7 +81,18 @@ author: accept, reject, reply, resolve, edit.
   ```
 
   (`prefix`, `suffix` and `lines` work as on the command line; JSON Lines and
-  `--from -` for stdin also work.)
+  `--from -` for stdin also work.) Check a batch first with
+  `scrivmark comment --from drafts.json --draft --dry-run`: it reports every
+  item that would fail, shows each wording in its sentence (`before` and
+  `after`, changed part in «»), and lists overlaps with other items, drafts,
+  open threads and source comments. Overlaps are advisory. Read the `after`
+  lines for edits that fit alone but jar in context. When adding, `--json
+  --summary` returns only the count, ids, authors and new revision.
+- **Revising a draft.** `scrivmark revise DRAFT --wording "..."` (or `--body`,
+  `--clear-wording`) amends it in place with the same author; the earlier
+  version is kept as its history and goes into the record if the draft is
+  kept. Pass `--by` if you are not the draft's author, and `--expect` to guard
+  against concurrent changes.
 - **Line edits from a second agent.** When another agent has already edited
   the files in this round, propose your edits as drafts with `wording` and an
   empty `body` instead of editing files: each shows as "Line edit, no

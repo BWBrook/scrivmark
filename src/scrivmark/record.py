@@ -91,6 +91,9 @@ SCHEMA = {
                                 "body": {"type": "string"},
                                 "imported_at": {"type": "string"},
                                 "drafted_by": {"type": "string"},
+                                "draft_history": {"type": "array", "items": {"type": "object", "properties": {
+                    "body": {"type": "string"}, "wording": {"type": ["string", "null"]}, "at": {"type": "string"},
+                    "by": {"type": "string"}}}},
                             },
                         },
                     },
@@ -103,7 +106,10 @@ SCHEMA = {
                 "type": "object",
                 "required": ["by", "file", "was", "wording", "at"],
                 "properties": {"by": {"type": "string"}, "file": {"type": "string"}, "was": {"type": "string"},
-                               "wording": {"type": "string"}, "at": {"type": "string"}},
+                               "wording": {"type": "string"}, "at": {"type": "string"},
+                               "history": {"type": "array", "items": {"type": "object", "properties": {
+                    "body": {"type": "string"}, "wording": {"type": ["string", "null"]}, "at": {"type": "string"},
+                    "by": {"type": "string"}}}}},
             },
         },
         "asks": {

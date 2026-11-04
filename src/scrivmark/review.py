@@ -560,6 +560,81 @@ def add_draft(rv: Review, anchor: dict, body: str, wording: str | None, expect: 
     return d
 
 
+def _context(text: str, s: int, e: int, wording: str | None, span: int = 90) -> dict:
+    """The passage in its surroundings, before and after the wording, with the
+    changed part marked «»."""
+    a = max(0, s - span)
+    a = text.rfind(" ", 0, a + 1) + 1 if a else 0
+    z = min(len(text), e + span)
+    space = text.find(" ", z)
+    z = len(text) if space < 0 else space
+    pre, post = text[a:s], text[e:z]
+    lead, tail = ("…" if a else ""), ("…" if z < len(text) else "")
+    flat = lambda x: " ".join(x.split())  # noqa: E731
+    out = {"before": flat(f"{lead}{pre}«{text[s:e]}»{post}{tail}")}
+    if wording is not None:
+        out["after"] = flat(f"{lead}{pre}«{wording}»{post}{tail}")
+    return out
+
+
+def preflight(rv: Review, items: list[dict]) -> list[dict]:
+    """For a batch about to be added: where each item lands, its wording in
+    context, and what it overlaps (other items, drafts, threads, comments in
+    the source). Overlaps are advisory."""
+    taken = []
+    for d in drafts(rv):
+        if d["where"]["state"] == "ok":
+            taken.append((d["anchor"]["file"], *d["where"]["range"], f"draft {d['id']}" + (f" by {d['by']}" if d.get("by") else "")))
+    for t in threads(rv):
+        if t["where"]["state"] == "ok" and t["status"] == "open":
+            taken.append((t["anchor"]["file"], *t["where"]["range"], f"thread {t['id']}"))
+    for rel in rv.ms.files:
+        for m in HTML_COMMENT.finditer(rv.text(rel) or ""):
+            taken.append((rel, m.start(), m.end(), "a comment in the source"))
+    out = []
+    spans = []
+    for n, i in enumerate(items, 1):
+        a = i["anchor"]
+        s, e = a["range"]
+        text = rv.text(a["file"]) or ""
+        hits = [label for f, x, y, label in taken if f == a["file"] and s < y and x < e]
+        hits += [f"item {m}" for m, (f, x, y) in spans if f == a["file"] and s < y and x < e]
+        spans.append((n, (a["file"], s, e)))
+        out.append({"item": n, "file": a["file"], "line": text.count("\n", 0, s) + 1, "exact": a["exact"],
+                    "draft": bool(i.get("draft")), "by": i.get("by"), "wording": i.get("wording"),
+                    **_context(text, s, e, i.get("wording")), "overlaps": hits})
+    return out
+
+
+def revise_draft(rv: Review, did: str, body: str | None = None, wording: str | None = None,
+                 clear_wording: bool = False, by: str | None = None, expect: str | None = None) -> dict:
+    """Change a draft's body or wording in place. It keeps its author; the
+    earlier version goes to its history, which is kept in the record if the
+    draft is kept."""
+    if rv.status != "open":
+        raise ScrivError("Drafts belong to the reviewer, before the round is returned.")
+    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+        ds = read_json(rv.root / rv.drafts_rel, [])
+        d = next((x for x in ds if x["id"] == did), None)
+        if d is None:
+            raise ScrivError(f"No draft {did}")
+        d.setdefault("history", []).append({"body": d["body"], "wording": d["wording"], "at": d.get("revised_at") or d["at"],
+                                            **({"by": d["revised_by"]} if d.get("revised_by") else {})})
+        if body is not None:
+            d["body"] = body
+        if clear_wording:
+            d["wording"] = None
+        elif wording is not None:
+            d["wording"] = wording
+        d["revised_at"] = record.now()
+        if by:
+            d["revised_by"] = by
+        else:
+            d.pop("revised_by", None)
+        writes[rv.drafts_rel] = json.dumps(ds, indent=2, ensure_ascii=False)
+    return d
+
+
 def keep_all(rv: Review, who: str) -> dict:
     """Keep every draft, in document order. A draft whose wording can no longer
     be applied (its passage changed, perhaps by an earlier draft) stays for the
@@ -620,7 +695,8 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
                                     "was written, so its wording was not applied. Edit the draft, or drop it.")
             if d.get("by"):
                 rv.rec.setdefault("drafted_edits", []).append(
-                    {"by": d["by"], "file": anchor["file"], "was": was, "wording": wording, "at": record.now()})
+                    {"by": d["by"], "file": anchor["file"], "was": was, "wording": wording, "at": record.now(),
+                     **({"history": d["history"]} if d.get("history") else {})})
                 writes[rv.record_rel] = record.dumps(rv.rec)
         t = None
         if body and body.strip():
@@ -630,6 +706,8 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
             }
             if d.get("by"):
                 t["messages"][0]["drafted_by"] = d["by"]
+            if d.get("history"):
+                t["messages"][0]["draft_history"] = d["history"]
             rv.rec["threads"].append(t)
             writes[rv.record_rel] = record.dumps(rv.rec)
     return t

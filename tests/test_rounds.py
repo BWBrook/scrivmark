@@ -282,3 +282,49 @@ def test_keep_all_applies_every_draft_and_leaves_conflicts(repo):
     assert "should should" not in (repo / "paper.md").read_text() and len(review.drafts(rv)) == 1
     assert [t["messages"][0]["body"] for t in rv.rec["threads"]] == ["Overclaim?"]
     assert rv.rec["drafted_edits"][0]["by"] == "Codex"
+
+
+def test_batch_dry_run_reports_failures_overlaps_and_wording_in_context(repo, tmp_path):
+    from typer.testing import CliRunner
+
+    from scrivmark.cli import app
+    rv = rounds.start(repo)
+    review.add_draft(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaim?", None, by="Claude")
+    f = tmp_path / "b.json"
+    f.write_text(json.dumps([
+        {"file": "paper.md", "quote": "thermal benefits", "wording": "thermal effects"},
+        {"file": "paper.md", "quote": "should should", "wording": "should"},
+        {"file": "paper.md", "quote": "not in the paper at all", "wording": "x"},
+    ]))
+    r = CliRunner().invoke(app, ["comment", "--from", str(f), "--draft", "--by", "Codex", "--dry-run", "--json"])
+    assert r.exit_code == 1
+    rep = json.loads(r.output)
+    assert [e["item"] for e in rep["errors"]] == [3]
+    first, second = rep["checked"]
+    assert first["overlaps"] == ["draft " + review.drafts(rv)[0]["id"] + " by Claude"] and second["overlaps"] == []
+    assert "«should»" in second["after"] and "«should should»" in second["before"]
+    assert len(review.drafts(review.active(repo))) == 1
+
+
+def test_revise_keeps_author_and_history_and_summary_is_compact(repo, tmp_path):
+    from typer.testing import CliRunner
+
+    from scrivmark.cli import app
+    rounds.start(repo)
+    f = tmp_path / "b.json"
+    f.write_text(json.dumps([{"file": "paper.md", "quote": "should should", "wording": "should not"}]))
+    r = CliRunner().invoke(app, ["comment", "--from", str(f), "--draft", "--by", "Codex", "--json", "--summary"])
+    out = json.loads(r.output)
+    assert out["count"] == 1 and out["by"] == ["Codex"] and set(out) == {"count", "ids", "by", "rev"}
+    did = out["ids"][0]
+    r = CliRunner().invoke(app, ["revise", did, "--wording", "should", "--expect", out["rev"]])
+    assert r.exit_code == 0, r.output
+    r = CliRunner().invoke(app, ["revise", did, "--body", "x", "--expect", out["rev"]])
+    assert r.exit_code != 0
+    rv = review.active(repo)
+    d = review.drafts(rv)[0]
+    assert d["by"] == "Codex" and d["wording"] == "should" and d["history"][0]["wording"] == "should not"
+    review.triage(rv, did, True, "BWB")
+    rec = review.active(repo).rec
+    record.validate(rec)
+    assert rec["drafted_edits"][0]["history"][0]["wording"] == "should not"
