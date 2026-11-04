@@ -21,7 +21,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Respon
 from starlette.routing import Route
 from watchfiles import awatch
 
-from . import config, gitutil, record, render, review
+from . import config, figures, gitutil, latex, record, render, review
 from .blocks import guarded_segments, line_of
 from .errors import Conflict, ScrivError, StaleRevision
 from .selection import map_selection
@@ -113,7 +113,7 @@ class Viewer:
             s, e = where["range"]
             out["line"] = [line_of(text, s), line_of(text, max(s, e - 1))]
             out["current"] = text[s:e]
-            seg = next((g for g in guarded_segments(text) if g.a <= s < g.z), None)
+            seg = next((g for g in guarded_segments(text, latex.is_tex(item["anchor"]["file"])) if g.a <= s < g.z), None)
             start = seg.b0 if seg else 0
             out["nth"] = text[start:s].count(text[s:e]) if e > s else 0
         else:
@@ -144,7 +144,9 @@ class Viewer:
         s0 = sum(len(x) for x in lines[: first - 1])
         e0 = sum(len(x) for x in lines[:last])
         block = text[s0:e0]
-        hit = map_selection(block, body.get("text", ""), body.get("before", "")) if body.get("text") else None
+        tex = latex.macro_text(text) if latex.is_tex(rel) else False
+        hit = (map_selection(block, body.get("text", ""), body.get("before", ""), tex)
+               if body.get("text") else None)
         if hit:
             return review.anchor_at(rv, rel, s0 + hit[0], s0 + hit[1])
         return review.anchor_at(rv, rel, s0, e0 - (1 if block.endswith("\n") else 0))
@@ -237,6 +239,28 @@ def build_app(viewer: Viewer) -> Starlette:
         if viewer.root.resolve() not in p.parents or ".git" in p.parts or ".scrivmark" in p.parts or not p.is_file():
             return Response(status_code=404)
         return FileResponse(p, headers={"Content-Security-Policy": "sandbox; script-src 'none'"})
+
+    async def figure_png(request: Request):
+        if not authorised(request):
+            return Response(status_code=403)
+        rel = request.path_params["path"]
+        if not rel.endswith(".png"):
+            return Response(status_code=404)
+        out = await asyncio.to_thread(figures.png, viewer.root, rel[:-4])
+        if out is None:
+            return Response(figures.placeholder("Figure could not be shown"), media_type="image/svg+xml",
+                            headers={"Content-Security-Policy": "sandbox; script-src 'none'"})
+        return FileResponse(out, headers={"Content-Security-Policy": "sandbox; script-src 'none'"})
+
+    async def tikz_svg(request: Request):
+        if not authorised(request):
+            return Response(status_code=403)
+        name = request.path_params["name"]
+        out, reason = await asyncio.to_thread(figures.tikz, viewer.root, name.removesuffix(".svg"))
+        headers = {"Content-Security-Policy": "sandbox; script-src 'none'"}
+        if out is None:
+            return Response(figures.placeholder(reason), media_type="image/svg+xml", headers=headers)
+        return FileResponse(out, media_type="image/svg+xml", headers=headers)
 
     async def state(request: Request):
         return JSONResponse(viewer.state())
@@ -366,6 +390,8 @@ def build_app(viewer: Viewer) -> Starlette:
         Route("/", index),
         Route("/static/{name}", static),
         Route("/files/{path:path}", repo_file),
+        Route("/png/{path:path}", figure_png),
+        Route("/scrv-tikz/{name}", tikz_svg),
         Route("/api/state", guard(state)),
         Route("/api/events", guard(events)),
         Route("/api/source", guard(source_get)),

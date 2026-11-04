@@ -155,7 +155,7 @@ function decorate() {
   if (editable()) {
     for (const b of $$(".scrv-b", doc)) {
       const ref = b.classList.contains("scrv-ref");
-      b.prepend(el("button", { class: "edit", title: ref ? "Edit this reference's entry in the bibliography file" : "Edit this passage's Markdown",
+      b.prepend(el("button", { class: "edit", title: ref ? "Edit this reference's entry in the bibliography file" : "Edit this passage's source",
         "aria-label": ref ? "Edit this reference" : "Edit this passage",
         onclick: e => { e.stopPropagation(); startEdit(b); } }, "✎"));
     }
@@ -568,10 +568,11 @@ async function startEdit(block) {
   let src;
   try { src = await api(`/api/source?file=${encodeURIComponent(block.dataset.file)}&lines=${block.dataset.lines}`); } catch (e) { return fail(e); }
   S.editing = block;
-  const ta = el("textarea", { spellcheck: "true", "aria-label": "Markdown source" });
+  const kind = /\.(tex|ltx)$/.test(block.dataset.file) ? "LaTeX" : "Markdown";
+  const ta = el("textarea", { spellcheck: "true", "aria-label": `${kind} source` });
   ta.value = src.text;
   const box = el("div", { class: "editor" },
-    el("div", { class: "hint" }, `Markdown source · ${src.file}, lines ${src.first}–${src.last} · Ctrl/⌘-Enter saves, Esc cancels`),
+    el("div", { class: "hint" }, `${kind} source · ${src.file}, lines ${src.first}–${src.last} · Ctrl/⌘-Enter saves, Esc cancels`),
     ta,
     el("div", { class: "acts" }, el("button", { class: "primary", onclick: save }, "Save"), el("button", { onclick: cancel }, "Cancel")));
   block.replaceWith(box);

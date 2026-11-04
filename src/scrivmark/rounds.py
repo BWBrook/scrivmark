@@ -67,7 +67,7 @@ def init(root: Path, files: list[str] | None = None, write: bool = True) -> dict
     found = config.detect(root)
     chosen = files or found["files"]
     if not chosen:
-        raise ScrivError("No Markdown or Quarto files found; name them: `scrivmark init paper.md`")
+        raise ScrivError("No Markdown, Quarto or LaTeX files found; name them: `scrivmark init paper.md`")
     missing = [f for f in chosen if not (root / f).exists()]
     if missing:
         raise ScrivError(f"These files do not exist: {', '.join(missing)}")

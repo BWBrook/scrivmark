@@ -16,8 +16,8 @@ import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from . import gitutil, sanitize
-from .blocks import PANDOC_FROM, fence_for, guarded_segments, line_of
+from . import gitutil, latex, sanitize
+from .blocks import HIDDEN, LATEX_LUA, PANDOC_FROM, fence_for, guarded_segments, line_of, pandoc_json
 from .config import Manuscript
 from .textdiff import Op, Unit, align
 
@@ -34,46 +34,51 @@ def _attrs(**kv) -> str:
 class _Builder:
     def __init__(self, fence: str, rel: str, cur: str, nonce: str):
         self.fence, self.rel, self.cur, self.nonce = fence, rel, cur, nonce
-        self.parts: list[str] = []
+        self.tex = latex.is_tex(rel)
+        self.defs = latex.defs_block(cur) if self.tex else ""
+        self.parts: list[str] = [self.defs + "\n\n"] if self.tex else []
         self.checks: list[tuple[int, str, str, str, str]] = []
 
     def wrap(self, body: str, cls: str, s: int, e: int, change: str | None = None) -> None:
         lines = f"{line_of(self.cur, s)}-{line_of(self.cur, max(s, e - 1))}"
         classes = " ".join(f".{c}" for c in cls.split())
         attrs = _attrs(file=self.rel, lines=lines, c=change, n=self.nonce)
-        self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{body}\n\n{self.fence}\n\n")
+        self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{self._src(body)}\n\n{self.fence}\n\n")
+
+    def _src(self, body: str) -> str:
+        return latex.code_block(body) if self.tex else body
 
     def old(self, body: str, change: str | None) -> None:
         if body.strip():
             attrs = _attrs(file=self.rel, c=change, n=self.nonce)
-            self.parts.append(f"{self.fence} {{.scrv-old {attrs}}}\n{_historical(body)}\n\n{self.fence}\n\n")
+            self.parts.append(f"{self.fence} {{.scrv-old {attrs}}}\n{self._src(_historical(body, self.tex))}\n\n{self.fence}\n\n")
 
     def yaml(self, seg, first_file: bool) -> None:
-        if first_file:
+        if first_file and seg.kind == "yaml":
             self.parts.append(self.cur[seg.b0 : seg.b1] + "\n\n")
 
     def inline(self, seg, marks: list[tuple[Unit, str | None]]) -> None:
-        spliced, reverted = _splice(self.cur, seg.b0, seg.b1, marks, self.nonce)
+        spliced, reverted = _splice(self.cur, seg.b0, seg.b1, marks, self.nonce, self.tex)
         cids = " ".join(sorted({c for _, c in marks if c}))
         self.checks.append((len(self.parts), spliced, self.cur[seg.b0 : seg.b1], reverted, cids))
         self.wrap(spliced, "scrv-b", seg.b0, seg.b1)
 
     def finish(self) -> list[str]:
-        for i in sorted(_verify(self.checks, self.fence)):
+        for i in sorted(_verify(self.checks, self.fence, self.defs)):
             pos, _, current, reverted, cids = self.checks[i]
             head = self.parts[pos].split("\n", 1)[0].replace(".scrv-b", ".scrv-b .scrv-ins-block", 1)
             old = _attrs(file=self.rel, c=cids, n=self.nonce)
-            self.parts[pos] = (f"{self.fence} {{.scrv-old {old}}}\n{_historical(reverted)}\n\n{self.fence}\n\n"
-                               f"{head}\n{current}\n\n{self.fence}\n\n")
+            self.parts[pos] = (f"{self.fence} {{.scrv-old {old}}}\n{self._src(_historical(reverted, self.tex))}\n\n{self.fence}\n\n"
+                               f"{head}\n{self._src(current)}\n\n{self.fence}\n\n")
         return self.parts
 
 
 FOOTNOTE_DEF = re.compile(r"^(\s{0,3})\[\^([^\]]+)\]:", re.M)
 
 
-def _historical(body: str) -> str:
+def _historical(body: str, tex: bool = False) -> str:
     """Old text shown for comparison must not define footnotes a second time."""
-    return FOOTNOTE_DEF.sub(r"\1\\[^\2]:", body)
+    return body if tex else FOOTNOTE_DEF.sub(r"\1\\[^\2]:", body)
 
 
 def _edges(text: str) -> tuple[str, str, str]:
@@ -84,7 +89,8 @@ def _edges(text: str) -> tuple[str, str, str]:
     return text[:i], core, text[i + len(core) :]
 
 
-def _splice(cur: str, b0: int, b1: int, marked: list[tuple[Unit, str | None]], nonce: str) -> tuple[str, str]:
+def _splice(cur: str, b0: int, b1: int, marked: list[tuple[Unit, str | None]], nonce: str,
+            tex: bool = False) -> tuple[str, str]:
     spliced, reverted, pos = [], [], b0
     for u, cid in sorted(marked, key=lambda m: m[0].new):
         n0, n1 = u.new
@@ -94,9 +100,9 @@ def _splice(cur: str, b0: int, b1: int, marked: list[tuple[Unit, str | None]], n
         o, n = _edges(u.old_text), _edges(u.new_text)
         spliced.append(o[0] or n[0])
         if o[1]:
-            spliced.append(f"[{o[1]}]{{.scrv-del{c}}}")
+            spliced.append(latex.mark("del", o[1], cid, nonce) if tex else f"[{o[1]}]{{.scrv-del{c}}}")
         if n[1]:
-            spliced.append(f"[{n[1]}]{{.scrv-ins{c}}}")
+            spliced.append(latex.mark("ins", n[1], cid, nonce) if tex else f"[{n[1]}]{{.scrv-ins{c}}}")
         spliced.append(o[2] or n[2])
         reverted.append(u.old_text)
         pos = n1
@@ -134,20 +140,22 @@ def _normal(node, mode: str):
     return node
 
 
-def _verify(checks: list[tuple[int, str, str, str, str]], fence: str) -> set[int]:
-    """Return the indices of checks whose spliced redline does not round-trip."""
+def _verify(checks: list[tuple[int, str, str, str, str]], fence: str, defs: str = "") -> set[int]:
+    """Return the indices of checks whose spliced redline does not round-trip.
+    `defs` is the LaTeX definitions block when the file is LaTeX."""
     if not checks:
         return set()
-    doc = []
+    doc = [defs + "\n"] if defs else []
     for i, (_, spliced, cur, rev, _) in enumerate(checks):
         for kind, body in (("s", spliced), ("c", cur), ("r", rev)):
+            body = latex.code_block(body) if defs else body
             doc.append(f"{fence} {{.scrv-g k=\"{i}{kind}\"}}\n{body}\n\n{fence}\n")
-    proc = subprocess.run(["pandoc", "-f", PANDOC_FROM, "-t", "json"], input="\n".join(doc),
-                          capture_output=True, text=True)
-    if proc.returncode != 0:
+    try:
+        parsed = pandoc_json("\n".join(doc), bool(defs))
+    except RuntimeError:
         return set(range(len(checks)))
     pieces = {}
-    for b in json.loads(proc.stdout)["blocks"]:
+    for b in parsed["blocks"]:
         if b["t"] == "Div" and "scrv-g" in b["c"][0][1]:
             pieces[dict(b["c"][0][2])["k"]] = b["c"][1]
     bad = set()
@@ -164,17 +172,17 @@ Pending = list[tuple[str, int, int, str, str]]  # (change id, start, end, type, 
 def _reviewer_view(b: _Builder, old: str | None, first: bool) -> None:
     """Open round: everything that differs from base is the reviewer's."""
     cur = b.cur
-    ops = align(old, cur) if old is not None and old != cur else [Op("equal", [], guarded_segments(cur), [])]
+    ops = align(old, cur, b.tex) if old is not None and old != cur else [Op("equal", [], guarded_segments(cur, b.tex), [])]
     for op in ops:
         if op.tag == "equal" or (op.tag == "pair" and not op.units):
             for seg in op.new:
-                b.yaml(seg, first) if seg.kind == "yaml" else b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
+                b.yaml(seg, first) if seg.kind in HIDDEN else b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
         elif op.tag == "pair":
             b.inline(op.new[0], [(u, None) for u in op.units])
         else:
-            b.old("\n\n".join(old[s.b0 : s.b1] for s in op.old if s.kind != "yaml"), None)
+            b.old("\n\n".join(old[s.b0 : s.b1] for s in op.old if s.kind not in HIDDEN), None)
             for seg in op.new:
-                b.yaml(seg, first) if seg.kind == "yaml" else b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block", seg.b0, seg.b1)
+                b.yaml(seg, first) if seg.kind in HIDDEN else b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block", seg.b0, seg.b1)
 
 
 def _author_view(b: _Builder, pending: Pending, first: bool) -> None:
@@ -189,11 +197,11 @@ def _author_view(b: _Builder, pending: Pending, first: bool) -> None:
             shown.add(p[0])
             b.old(p[4].strip("\n"), p[0])
 
-    for seg in guarded_segments(cur):
+    for seg in guarded_segments(cur, b.tex):
         for p in blocks:
             if p[1] == p[2] and seg.a <= p[1] <= seg.b0:
                 old_once(p)
-        if seg.kind == "yaml":
+        if seg.kind in HIDDEN:
             b.yaml(seg, first)
             continue
         hit = next((p for p in blocks if p[1] < p[2] and p[1] <= seg.b0 and seg.b1 <= p[2]), None)
@@ -317,6 +325,12 @@ def _tag_references(html: str, entries: dict[str, tuple[str, int, int]]) -> str:
     return REF_DIV.sub(tag, html)
 
 
+def tikz_cache(root: Path) -> Path:
+    d = root / ".scrivmark" / "cache" / "tikz"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 @lru_cache(maxsize=1)
 def _math_flag() -> str:
     """--mathml became --math-method=mathml in later pandoc releases."""
@@ -327,7 +341,9 @@ def _math_flag() -> str:
 def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str, str]:
     cmd = [
         "pandoc", "-f", PANDOC_FROM, "-t", "html5", _math_flag(), "--wrap=none", "--standalone",
-        "--template", str(ASSETS / "template.html"), "--lua-filter", str(ASSETS / "scrivmark.lua"),
+        "--template", str(ASSETS / "template.html"),
+        "--lua-filter", LATEX_LUA, "--metadata", f"scrv-cache={tikz_cache(root)}",
+        "--lua-filter", str(ASSETS / "scrivmark.lua"),
         "--citeproc", "--metadata", "link-citations=true", "--metadata", "pagetitle=scrivmark",
         "--metadata", "reference-section-title=References", "--metadata", f"scrv-nonce={nonce}",
     ]

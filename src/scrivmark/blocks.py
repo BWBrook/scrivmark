@@ -15,6 +15,9 @@ import re
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib.resources import files
+
+from . import latex
 
 LIST_MARKER = re.compile(r"^\s{0,3}([-*+]|\d+[.)]|#[.)]|\(?[a-zA-Z][.)])\s+")
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
@@ -24,6 +27,8 @@ FOOTNOTE_DEF = re.compile(r"^\[\^[^\]]+\]:")
 COLON_RUN = re.compile(r"^\s*(:{3,})", re.M)
 
 PANDOC_FROM = "markdown-raw_html-raw_attribute"
+LATEX_LUA = str(files("scrivmark") / "assets" / "latex.lua")
+HIDDEN = {"yaml", "preamble", "postamble"}
 
 
 @dataclass(frozen=True)
@@ -143,8 +148,19 @@ def fence_for(text: str) -> str:
     return ":" * max(8, (max(runs) if runs else 0) + 3)
 
 
+def pandoc_json(markdown: str, tex: bool = False) -> dict:
+    """Pandoc's AST for scrivmark's Markdown, with LaTeX code blocks read."""
+    cmd = ["pandoc", "-f", PANDOC_FROM, "-t", "json"] + (["--lua-filter", LATEX_LUA] if tex else [])
+    proc = subprocess.run(cmd, input=markdown, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr)
+    return json.loads(proc.stdout)
+
+
 @lru_cache(maxsize=256)
-def pandoc_blocks(text: str) -> str:
+def pandoc_blocks(text: str, tex: bool = False, defs: str = "") -> str:
+    if tex:
+        return json.dumps(pandoc_json(defs + "\n\n" + latex.code_block(text), True)["blocks"])
     proc = subprocess.run(
         ["pandoc", "-f", PANDOC_FROM, "-t", "json"], input=text, capture_output=True, text=True
     )
@@ -165,14 +181,16 @@ def _strip_wrappers(blocks: list) -> tuple[list, list[int]]:
     return flat, counts
 
 
-def _wrap(text: str, segs: list[Segment], fence: str) -> str:
+def _wrap(text: str, segs: list[Segment], fence: str, tex: bool = False) -> str:
     parts = []
     for i, s in enumerate(segs):
         body = text[s.b0 : s.b1]
         if s.kind == "yaml":
             parts.append(body + "\n\n")
+        elif s.kind in HIDDEN:
+            continue
         else:
-            parts.append(f"{fence} {{.scrv-b}}\n{body}\n\n{fence}\n\n")
+            parts.append(f"{fence} {{.scrv-b}}\n{latex.code_block(body) if tex else body}\n\n{fence}\n\n")
     return "".join(parts)
 
 
@@ -182,22 +200,40 @@ def _merge(segs: list[Segment], i: int, j: int) -> list[Segment]:
     return segs[:i] + [merged] + segs[j + 1 :]
 
 
-def guarded_segments(text: str) -> list[Segment]:
-    segs = _to_segments(text, scan(text))
+def guarded_segments(text: str, tex: bool = False) -> list[Segment]:
+    return list(_guarded(text, tex))
+
+
+@lru_cache(maxsize=64)
+def _guarded(text: str, tex: bool) -> tuple[Segment, ...]:
+    return tuple(_guard(text, tex))
+
+
+def _guard(text: str, tex: bool) -> list[Segment]:
+    segs = _to_segments(text, latex.scan(text) if tex else scan(text))
     if not segs:
         return segs
+    defs = latex.defs_block(text) if tex else ""
     try:
-        target = json.loads(pandoc_blocks(text))
+        if tex:
+            shown_segs = [s for s in segs if s.kind not in HIDDEN]
+            if not shown_segs:
+                return segs
+            shown = text[shown_segs[0].b0 : shown_segs[-1].b1]
+            target = json.loads(pandoc_blocks(shown, True, defs))
+        else:
+            target = json.loads(pandoc_blocks(text))
     except (RuntimeError, FileNotFoundError):
         return segs
     fence = fence_for(text)
     for _ in range(len(segs) + 1):
-        wrapped = json.loads(pandoc_blocks(_wrap(text, segs, fence)))
+        doc = _wrap(text, segs, fence, tex)
+        wrapped = pandoc_json(defs + "\n\n" + doc, True)["blocks"] if tex else json.loads(pandoc_blocks(doc))
         flat, counts = _strip_wrappers(wrapped)
         if flat == target:
             return segs
         k = next((x for x, (p, q) in enumerate(zip(flat, target)) if p != q), min(len(flat), len(target)))
-        body = [i for i, s in enumerate(segs) if s.kind != "yaml"]
+        body = [i for i, s in enumerate(segs) if s.kind not in HIDDEN]
         if len(counts) != len(body):
             break
         cum, culprit = 0, body[-1]
@@ -211,11 +247,12 @@ def guarded_segments(text: str) -> list[Segment]:
         if lo == hi:
             break
         segs = _merge(segs, lo, hi)
-    body = [s for s in segs if s.kind != "yaml"]
-    head = [s for s in segs if s.kind == "yaml"]
+    body = [s for s in segs if s.kind not in HIDDEN]
     if not body:
         return segs
-    return head + [Segment(body[0].a, body[0].b0, body[-1].b1, body[-1].z, "merged")]
+    merged = Segment(body[0].a, body[0].b0, body[-1].b1, body[-1].z, "merged")
+    return [s for s in segs if s.kind in HIDDEN and s.b0 < body[0].b0] + [merged] + \
+        [s for s in segs if s.kind in HIDDEN and s.b0 > body[-1].b0]
 
 
 def line_of(text: str, offset: int) -> int:

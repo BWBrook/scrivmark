@@ -75,16 +75,26 @@ def _makedoc(root: Path) -> dict | None:
     return None
 
 
+def _skip(rel: Path) -> bool:
+    return any(part.startswith((".", "_")) or part in ("reviews", "node_modules") for part in rel.parts)
+
+
 def detect(root: Path) -> dict:
     found = _makedoc(root)
     if found:
         return found
+    from . import latex
+
+    tex = latex.detect(root, _skip)
+    if tex:
+        csl = sorted(str(p.relative_to(root)) for p in root.rglob("*.csl") if ".git" not in p.parts)
+        return {**tex, "csl": csl[0] if csl else None, "source": "LaTeX documents"}
     files = sorted(
         str(p.relative_to(root))
         for p in root.rglob("*")
         if p.suffix in PROSE
         and p.name not in SKIP
-        and not any(part.startswith((".", "_")) or part in ("reviews", "node_modules") for part in p.relative_to(root).parts)
+        and not _skip(p.relative_to(root))
     )
     bibs = sorted(str(p.relative_to(root)) for p in root.rglob("*.bib") if ".git" not in p.parts)
     csl = sorted(str(p.relative_to(root)) for p in root.rglob("*.csl") if ".git" not in p.parts)

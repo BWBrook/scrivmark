@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, gitutil, record
+from . import config, gitutil, latex, record
 from .errors import Conflict, ScrivError
 from .state import local_dir, read_json, revision, transaction
 from .textdiff import diff_units, projection
@@ -98,7 +98,7 @@ def catalogue(root: Path, ms: config.Manuscript, base: str, returned: str) -> li
         if status == "M" and ms.is_prose(path):
             a = gitutil.show(root, base, path) or ""
             b = gitutil.show(root, returned, path) or ""
-            for u in diff_units(a, b):
+            for u in diff_units(a, b, latex.is_tex(path)):
                 changes.append(
                     {"type": u.type, "file": path, "old_file": None, "base": u.old_text,
                      "reviewer": u.new_text, "r_range": list(u.new)}

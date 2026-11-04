@@ -2,7 +2,7 @@
 
 > **Status:** early beta, developed in the open. Try it on the tutorial first; expect rough edges, and please report them.
 
-**Track changes and comments for manuscripts written in Markdown or Quarto, without Word.**
+**Track changes and comments for manuscripts written in Markdown, Quarto or LaTeX, without Word.**
 
 You write your paper in plain text, in a git repository, next to its code and
 data. scrivmark adds the part that has always sent people back to Word: a
@@ -12,8 +12,8 @@ comment and accepts, rejects or replies.
 
 ![The scrivmark viewer: a rendered manuscript with tracked changes and margin comments](docs/img/viewer.png)
 
-- **Edits are real edits.** A reviewer's changes are made to the Markdown
-  itself, on a review branch. The redline you see is the difference from the
+- **Edits are real edits.** A reviewer's changes are made to the Markdown or
+  LaTeX source itself, on a review branch. The redline you see is the difference from the
   author's version, so nothing is ever converted back from another format.
 - **Comments sit beside the text, not in it.** Threads are kept in a review
   file next to the manuscript, anchored to the passage they are about, and
@@ -26,6 +26,28 @@ comment and accepts, rejects or replies.
   the same review.
 - **The record stays.** Every change, decision and comment thread is kept in
   the repository when the review is merged.
+
+## LaTeX manuscripts
+
+scrivmark reads `.tex` sources through pandoc's LaTeX reader, so a LaTeX
+grant or paper gets the same viewer, redline, comments and rounds as a
+Markdown one. `scrivmark init` finds the documents (each file with
+`\documentclass` and `\begin{document}`, preferring those in a directory with
+a `.latexmkrc`), follows `\input` and `\include`, and takes the bibliography
+from `\bibliography{...}`.
+
+- The preamble is not shown, but its `\newcommand` definitions are expanded,
+  and selections across simple macros map back to the source.
+- `%` comments show as grey "comment in the source" notes.
+- `\ref`, `\eqref`, `\cref` and `\autoref` are numbered from the document's
+  own labels.
+- PDF figures are shown as PNGs (needs `pdftocairo`, from Poppler) and each
+  `tikzpicture` is compiled on its own to SVG (needs `pdflatex`). Without the
+  tools, those figures show as placeholders.
+- The viewer is a faithful reading of the words, not of the page: build the
+  PDF as usual to check layout and page limits.
+- Citation style: pandoc's default author-date unless `csl` in
+  `scrivmark.toml` names a CSL file.
 
 ## Five-minute tutorial
 

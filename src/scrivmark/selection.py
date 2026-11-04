@@ -9,6 +9,7 @@ selection that cannot be placed exactly falls back to the whole block.
 
 import re
 
+from . import latex
 from .textdiff import tokens
 
 GENERATED = {"fnref", "cite", "ref", "math"}
@@ -17,7 +18,7 @@ TYPOGRAPHY = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d
 PLACEHOLDER = "￼"
 
 
-def _plain(src: str) -> tuple[str, list[tuple[int, int]]]:
+def _plain(src: str, tex: bool | dict[str, str] = False) -> tuple[str, list[tuple[int, int]]]:
     chars: list[str] = []
     spans: list[tuple[int, int]] = []
 
@@ -33,6 +34,9 @@ def _plain(src: str) -> tuple[str, list[tuple[int, int]]]:
         chars.append(ch)
         spans.append((s, e))
 
+    if tex is not False:
+        _plain_tex(src, emit, tex if isinstance(tex, dict) else {})
+        return "".join(chars), spans
     line_start = True
     for t in tokens(src):
         if t.kind in GENERATED:
@@ -58,6 +62,40 @@ def _plain(src: str) -> tuple[str, list[tuple[int, int]]]:
     return "".join(chars), spans
 
 
+def _plain_tex(src: str, emit, macros: dict[str, str]) -> None:
+    """LaTeX source as the reader sees it: commands, braces and comments drop
+    out, control symbols become their characters, TeX quotes and dashes their
+    typographic forms."""
+    skip = -1
+    for t in tokens(src, tex=True):
+        if t.start < skip:
+            continue
+        if src[t.start : t.start + 2] in ("``", "''"):
+            emit('"', t.start, t.start + 2)
+            skip = t.start + 2
+            continue
+        if t.kind in GENERATED:
+            emit(PLACEHOLDER, t.start, t.start + len(t.text))
+        elif t.kind in ("comment", "attr", "link"):
+            continue
+        elif t.kind == "cmd":
+            if t.text in macros:
+                inner: list[str] = []
+                _plain_tex(macros[t.text], lambda ch, s, e: inner.append(ch), {})
+                for ch in inner:
+                    emit(ch, t.start, t.start + len(t.text))
+            elif t.text in latex.SYMBOLS:
+                for ch in latex.SYMBOLS[t.text] or "":
+                    emit(ch, t.start, t.start + len(t.text))
+        elif t.kind == "punct":
+            if t.text in "{}":
+                continue
+            emit({"~": " ", "`": "'"}.get(t.text, t.text), t.start, t.start + 1)
+        else:
+            for i, ch in enumerate(t.text):
+                emit(ch, t.start + i, t.start + i + 1)
+
+
 def _norm(s: str) -> str:
     s = s.translate(TYPOGRAPHY).replace("\u2026", "...")
     return re.sub(r"\s+", " ", s).strip()
@@ -71,15 +109,16 @@ def _before_score(plain: str, i: int, before: str) -> int:
     return n
 
 
-def map_selection(src: str, text: str, before: str = "") -> tuple[int, int] | None:
+def map_selection(src: str, text: str, before: str = "", tex: bool | dict[str, str] = False) -> tuple[int, int] | None:
     """Offsets within `src` of the rendered selection, or None when it cannot
-    be placed exactly (the caller then anchors to the whole block).
+    be placed exactly (the caller then anchors to the whole block). For LaTeX,
+    `tex` is True or the document's macro_text().
 
     The page sends the selection with generated material (citations,
     cross-references, maths, footnote marks) already replaced by the
     placeholder, so a faithful selection matches the plain source exactly.
     """
-    plain, spans = _plain(src)
+    plain, spans = _plain(src, tex)
     sel = _norm(text)
     if len(sel) < 2:
         return None

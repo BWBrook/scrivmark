@@ -6,6 +6,7 @@ from bisect import bisect_right
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from . import latex
 from .blocks import Segment, guarded_segments, pandoc_blocks
 
 TOKEN = re.compile(
@@ -34,8 +35,9 @@ class Token:
     kind: str
 
 
-def tokens(text: str, base: int = 0) -> list[Token]:
-    return [Token(m.group(), base + m.start(), m.lastgroup) for m in TOKEN.finditer(text)]
+def tokens(text: str, base: int = 0, tex: bool = False) -> list[Token]:
+    rx = latex.TOKEN if tex else TOKEN
+    return [Token(m.group(), base + m.start(), m.lastgroup) for m in rx.finditer(text)]
 
 
 @dataclass
@@ -96,9 +98,9 @@ def _slide(ops: list[tuple], ot: list[Token], nt: list[Token]) -> list[tuple]:
     return [tuple(o) for o in ops if o[0] != "equal" or o[2] > o[1]]
 
 
-def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment) -> list[Unit]:
-    ot = tokens(old[oseg.b0 : oseg.b1], oseg.b0)
-    nt = tokens(new[nseg.b0 : nseg.b1], nseg.b0)
+def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment, tex: bool = False) -> list[Unit]:
+    ot = tokens(old[oseg.b0 : oseg.b1], oseg.b0, tex)
+    nt = tokens(new[nseg.b0 : nseg.b1], nseg.b0, tex)
     sm = SequenceMatcher(None, [_key(t) for t in ot], [_key(t) for t in nt], autojunk=False)
     ops = _slide(sm.get_opcodes(), ot, nt)
     groups: list[list[tuple]] = []
@@ -145,10 +147,10 @@ class Op:
     units: list[Unit]
 
 
-def align(old: str, new: str) -> list[Op]:
+def align(old: str, new: str, tex: bool = False) -> list[Op]:
     """Align the blocks of two texts. Paired prose blocks carry word-level
     units; everything else that differs is one block unit."""
-    os_, ns = guarded_segments(old), guarded_segments(new)
+    os_, ns = guarded_segments(old, tex), guarded_segments(new, tex)
     okeys = [old[s.b0 : s.b1] for s in os_]
     nkeys = [new[s.b0 : s.b1] for s in ns]
     sm = SequenceMatcher(None, okeys, nkeys, autojunk=False)
@@ -167,8 +169,8 @@ def align(old: str, new: str) -> list[Op]:
             for oi, nj in zip(range(i1, i2), range(j1, j2)):
                 oseg, nseg = os_[oi], ns[nj]
                 if oseg.kind in TEXT_KINDS and nseg.kind in TEXT_KINDS and _similar(okeys[oi], nkeys[nj]):
-                    units = _token_hunks(old, new, oseg, nseg)
-                    if _structure_differs(okeys[oi], _undo(new, nseg, units)):
+                    units = _token_hunks(old, new, oseg, nseg, tex)
+                    if _structure_differs(okeys[oi], _undo(new, nseg, units), tex):
                         block(oi, oi + 1, nj, nj + 1)
                     else:
                         ops.append(Op("pair", [oseg], [nseg], units))
@@ -189,20 +191,20 @@ def _undo(new: str, seg: Segment, units: list[Unit]) -> str:
     return text
 
 
-def _structure_differs(a: str, b: str) -> bool:
+def _structure_differs(a: str, b: str, tex: bool = False) -> bool:
     """Whether two texts differ in meaning (beyond reflowed whitespace),
     judged by pandoc."""
     soft = lambda j: j.replace('"t": "SoftBreak"', '"t": "Space"')  # noqa: E731
     try:
-        return soft(pandoc_blocks(a)) != soft(pandoc_blocks(b))
+        return soft(pandoc_blocks(a, tex)) != soft(pandoc_blocks(b, tex))
     except (RuntimeError, FileNotFoundError):
         return True
 
 
-def diff_units(old: str, new: str) -> list[Unit]:
+def diff_units(old: str, new: str, tex: bool = False) -> list[Unit]:
     if old == new:
         return []
-    return [u for op in align(old, new) for u in op.units]
+    return [u for op in align(old, new, tex) for u in op.units]
 
 
 def _point(segs: list[Segment], i: int, end: int) -> int:

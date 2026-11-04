@@ -8,12 +8,12 @@ from typing import Annotated, Optional
 
 import typer
 
-from . import config, gitutil, review, rounds
+from . import config, gitutil, latex, review, rounds
 from .errors import ScrivError
 from .state import ensure_ignored, local_dir, read_json, revision
 
 app = typer.Typer(
-    help="Manuscript review on Markdown and Quarto sources. Start with `scrivmark tutorial`.",
+    help="Manuscript review on Markdown, Quarto and LaTeX sources. Start with `scrivmark tutorial`.",
     no_args_is_help=True,
     add_completion=False,
     pretty_exceptions_enable=False,
@@ -123,6 +123,9 @@ def doctor(as_json: Json = False):
         check("scrivmark.toml", True, ", ".join(ms.files))
         for b in ms.bibliography:
             check(f"bibliography {b}", (root / b).exists())
+        if any(latex.is_tex(f) for f in ms.files):
+            for tool, why in (("pdftocairo", "shows PDF figures"), ("pdflatex", "draws TikZ pictures")):
+                check(f"{tool} (optional, {why})", shutil.which(tool), "" if shutil.which(tool) else "not found; those figures show as placeholders")
         if any(f.endswith(".qmd") for f in ms.files):
             check(".qmd rendering", True, "rendered with pandoc in this version; Quarto code outputs are not shown yet")
     except ScrivError as e:
@@ -203,7 +206,7 @@ def start(author_branch: Annotated[Optional[str], typer.Option(help="Branch to r
     """Start a review round (reviewer)."""
     rv = rounds.start(_root(), author_branch, statement)
     _emit(rv.rec["round"], as_json, f"Started round {rv.id} on branch review/{rv.id}.\n"
-          "Edit the Markdown and add comments; run `scrivmark serve` to see the rendered review.")
+          "Edit the manuscript and add comments; run `scrivmark serve` to see the rendered review.")
 
 
 @app.command()

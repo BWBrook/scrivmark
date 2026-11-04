@@ -3,7 +3,7 @@
 Status: revised after independent review, for lock. 3 November 2026.
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
-cycle of manuscript review on Markdown and Quarto sources, without Word, HTML
+cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
 exports or any reconstruction of edits from a rendered format. A local viewer
 renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
@@ -300,6 +300,19 @@ desktop app's browser pane.
   citations, inline maths, links, code spans and cross-references as atomic
   tokens) is spliced into the Markdown as `[old]{.scrv-del}` and
   `[new]{.scrv-ins}` spans.
+- **LaTeX.** A `.tex` block travels inside the Markdown as a fenced code
+  block of class `scrv-tex`, preceded per file by a `scrv-texdefs` block with
+  the preamble's definitions. `assets/latex.lua` runs first and reads each
+  with pandoc's LaTeX reader in place. Redline marks are
+  `\textcolor{scrvdel-<nonce>-<change>}{...}`, which the reader keeps as a
+  styled span and the filter turns into the same `scrv-del`/`scrv-ins` spans,
+  so the guard, sanitising and numbering are shared. The splitter
+  (`latex.scan`) cuts at blank lines, headings and block environments; the
+  preamble and everything from `\end{document}` are hidden blocks; comment
+  lines and display maths stay with their paragraph, as in TeX. Labels become
+  `fig-`/`tbl-`/`eq-`/`sec-` identifiers and `\ref`-family links become
+  cross-reference citations. TikZ pictures are written to `.scrivmark/cache`
+  and compiled on request; PDF figures are converted to PNG.
 - **Guard:** stripping the deletion spans must give the current block's AST,
   and stripping the insertion spans the base block's AST. If either fails, the
   block falls back to the old block struck through above the new one.

@@ -177,6 +177,8 @@ local function xref_inlines(cite)
     local text
     if l and l.kind == "sec" then
       text = l.title
+    elseif l and c.mode == "SuppressAuthor" then
+      text = tostring(l.n)
     elseif l then
       text = names[l.kind] .. " " .. l.n
     else
@@ -202,6 +204,10 @@ local function inline_filter(dir, old)
     end,
     Image = function(img)
       img.src = rebase(img.src, dir)
+      local name = img.src:match("([^/]*)$") or ""
+      if img.src:match("^/files/") and (name:match("%.pdf$") or name:match("%.eps$") or not name:match("%.")) then
+        img.src = "/png/" .. img.src:sub(8) .. ".png"
+      end
       return img
     end,
     Link = function(l)
@@ -313,7 +319,14 @@ local function comment_block(blk)
   return blk
 end
 
-local comments = { Para = comment_block, Plain = comment_block }
+local function tex_note(el)
+  if el.classes:includes("scrvtexnote") then
+    el.classes = pandoc.List({ "scrv-note" })
+    return el
+  end
+end
+
+local comments = { Para = comment_block, Plain = comment_block, Span = tex_note, Div = tex_note }
 
 function Pandoc(doc)
   nonce = doc.meta["scrv-nonce"] and stringify(doc.meta["scrv-nonce"]) or ""

@@ -1,11 +1,11 @@
 ---
 name: scrivmark
-description: Use when a repository has a scrivmark.toml or a review/ branch, or when asked to review a Markdown/Quarto manuscript, respond to a review, do a pre-pass, or "look at my selection" in the scrivmark viewer. Teaches the scrivmark CLI for tracked changes and comment threads on manuscript sources.
+description: Use when a repository has a scrivmark.toml or a review/ branch, or when asked to review a Markdown, Quarto or LaTeX manuscript, respond to a review, do a pre-pass, or "look at my selection" in the scrivmark viewer. Teaches the scrivmark CLI for tracked changes and comment threads on manuscript sources.
 ---
 
 # Working with scrivmark
 
-scrivmark runs manuscript review on Markdown and Quarto sources in git:
+scrivmark runs manuscript review on Markdown, Quarto and LaTeX sources in git:
 
 - a reviewer's edits are real edits on a `review/<round>` branch, and the
   redline is their diff against the author's version;
@@ -83,8 +83,13 @@ author: accept, reject, reply, resolve, edit.
   when the round is returned or closed, as part of the published exchange.
 - **Dictated comments and edits.** When the reviewer tells you what to say,
   use `scrivmark comment` without `--draft`; it is signed as theirs. When they
-  ask for a change, edit the Markdown file directly. That edit *is* the
+  ask for a change, edit the source file directly. That edit *is* the
   tracked change.
+- **LaTeX sources.** Edit `.tex` files as LaTeX: keep commands, braces and
+  `%` comments intact, and write `--wording` answers as LaTeX source. Quotes
+  for `scrivmark comment --quote` are source text (`\USD{5,000}`, not
+  `US$5,000`). The preamble is not shown in the viewer; anything changed there
+  appears only in `scrivmark changes`.
 - `scrivmark return` hands the round back. It refuses while drafts remain.
 
 ## Helping an author
