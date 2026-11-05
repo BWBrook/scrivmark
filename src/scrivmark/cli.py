@@ -23,6 +23,19 @@ Json = Annotated[bool, typer.Option("--json", help="Machine-readable output for 
 Expect = Annotated[Optional[str], typer.Option("--expect", help="Refuse if the review has changed since this revision.")]
 
 
+def _show_version(value: bool) -> None:
+    if value:
+        from . import __version__
+        typer.echo(f"scrivmark {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _options(version: Annotated[bool, typer.Option("--version", callback=_show_version, is_eager=True,
+                                                   help="Show the version and exit.")] = False) -> None:
+    pass
+
+
 def _root() -> Path:
     return gitutil.root(Path.cwd())
 
@@ -94,6 +107,10 @@ def doctor(as_json: Json = False):
     def check(name, ok, detail="", note=False):
         checks.append({"check": name, "ok": bool(ok), "detail": detail, "note": note and not ok})
 
+    from . import release
+
+    current_release, detail = release.status()
+    check("scrivmark", current_release, detail, note=True)
     check("git", shutil.which("git"))
     pandoc = shutil.which("pandoc")
     ver = subprocess.run(["pandoc", "--version"], capture_output=True, text=True).stdout.split("\n")[0] if pandoc else ""

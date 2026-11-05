@@ -185,8 +185,11 @@ def test_doctor_fails_only_on_missing_essentials(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SCRIVMARK_AS", "Barry W. Brook")
+    from scrivmark import release
+    monkeypatch.setattr(release, "latest", lambda: "99.0.0")
     ok = CliRunner().invoke(app, ["doctor"])
     assert ok.exit_code == 0 and "· repository" in ok.output
+    assert "99.0.0 is out" in ok.output and "restart any running viewer" in ok.output
     monkeypatch.delenv("SCRIVMARK_AS")
     bad = CliRunner().invoke(app, ["doctor"])
     assert bad.exit_code == 1 and "✗ identity" in bad.output
@@ -220,3 +223,19 @@ def test_a_missing_citation_still_warns_when_the_cache_is_used(repo):
     ms = config.load(repo)
     warnings = [render.render(repo, ms, None)[1] for _ in range(2)]
     assert all("citation nosuch2020 not found" in w for w in warnings)
+
+
+def test_version_is_stated_once_per_file_and_has_a_changelog_entry():
+    import tomllib
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from scrivmark import __version__
+    from scrivmark.cli import app
+
+    root = Path(__file__).resolve().parents[1]
+    assert tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"] == __version__
+    assert f"## {__version__} " in (root / "CHANGELOG.md").read_text()
+    assert f"version: {__version__}" in (root / "CITATION.cff").read_text()
+    assert CliRunner().invoke(app, ["--version"]).output.strip() == f"scrivmark {__version__}"

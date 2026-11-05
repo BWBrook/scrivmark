@@ -71,6 +71,17 @@ To let Claude Code or Codex help, install the agent guide once:
 scrivmark skill --install
 ```
 
+To update later, run the install again with `--reinstall`, then refresh the
+agent guide and restart any running viewer:
+
+```bash
+uv tool install --reinstall git+https://github.com/BWBrook/scrivmark
+scrivmark skill --install
+```
+
+`scrivmark --version` shows the release you have, `scrivmark doctor` says
+whether a newer one is out, and [CHANGELOG.md](CHANGELOG.md) says what changed.
+
 ## See a finished round
 
 [scrivmark-tutorial-example](https://github.com/BWBrook/scrivmark-tutorial-example)

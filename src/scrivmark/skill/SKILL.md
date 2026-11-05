@@ -19,6 +19,9 @@ Always use `--json` when you need to read output. Never edit
 
 This guide is loaded when your session starts. If scrivmark was upgraded since,
 `scrivmark skill` prints the current one; read it before going on.
+`scrivmark --version` shows the installed release. If `scrivmark doctor` says
+a newer one is out, tell the human, with the update command it gives and the
+changelog link; updating is their call, and it means restarting the viewer.
 
 ## The viewer
 
