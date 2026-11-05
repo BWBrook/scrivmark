@@ -328,3 +328,20 @@ def test_revise_keeps_author_and_history_and_summary_is_compact(repo, tmp_path):
     rec = review.active(repo).rec
     record.validate(rec)
     assert rec["drafted_edits"][0]["history"][0]["wording"] == "should not"
+
+
+def test_keep_all_applies_neighbouring_edits_and_anchors_their_threads(repo):
+    rv = rounds.start(repo)
+    review.add_draft(rv, review.anchor_quote(rv, "paper.md", "should should"), "Doubled word", "should", by="Codex")
+    review.add_draft(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaim?", "thermal effects",
+                     by="Codex")
+    out = review.keep_all(review.active(repo), "BWB")
+    assert len(out["kept"]) == 2 and not out["left"]
+    rv = review.active(repo)
+    text = (repo / "paper.md").read_text()
+    assert "should should" not in text and "thermal effects" in text
+    for t in review.threads(rv):
+        assert t["where"]["state"] == "ok" and t["where"]["how"] == "exact"
+        s, e = t["where"]["range"]
+        assert text[s:e] == t["anchor"]["exact"]
+    assert {e["wording"] for e in rv.rec["drafted_edits"]} == {"should", "thermal effects"}

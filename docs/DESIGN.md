@@ -286,7 +286,12 @@ desktop app's browser pane.
   Quarto's pipeline is the first spike of layer 5; until it passes, `.qmd`
   renders through pandoc and code outputs show as unavailable.
 - **Citations** through citeproc with the project's bibliography and CSL; the
-  full reference on hover.
+  full reference on hover. `citations.lua` hands citeproc only the citations,
+  in document order, and caches the result keyed on them and on the contents
+  of the bibliography and style files, so editing prose does not re-run it.
+  Parsing a large style dominated rendering: Chicago 18th edition (168 KB)
+  took 2.4 s of every render of a 56 KB manuscript (measured 5 November 2026).
+  Note styles, which move citations into footnotes, go to citeproc whole.
 - **Cross-references** with the pandoc engine: a Lua filter numbers a stated
   subset (`{#fig-…}`, `{#tbl-…}`, `{#eq-…}`, `{#sec-…}` and `@` references to
   them), running before citeproc so those references are not read as
@@ -298,6 +303,8 @@ desktop app's browser pane.
   to chunks by position after edits; unmatched outputs show as unavailable.
 - **Live update.** Any change to a manuscript file or the record triggers a
   debounced full re-render, because citation and numbering are document-wide.
+  Rendering runs in a worker thread, one at a time, so the viewer stays
+  responsive and shows that it is working.
 
 ### Redline
 

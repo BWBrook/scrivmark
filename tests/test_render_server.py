@@ -198,3 +198,25 @@ def test_image_size_survives_but_other_styles_do_not():
     html = sanitize.clean('<p><img src="a.png" style="width:95%" /><img src="b.png" style="width:5em;background:url(x)" />'
                           '<span style="width:9px">t</span></p>')
     assert 'style="width:95%"' in html and "background" not in html and "<span>" in html
+
+
+def test_citations_are_cached_and_follow_the_bibliography(repo):
+    rv = rounds.start(repo)
+    ms = config.load(repo)
+    first, _ = render.render(repo, ms, rv.rec["round"]["base"])
+    cached = list((repo / ".scrivmark" / "cache" / "cites").glob("*.json"))
+    assert cached
+    edit(repo, "proves that", "tests whether")
+    second, _ = render.render(repo, ms, rv.rec["round"]["base"])
+    assert sorted((repo / ".scrivmark" / "cache" / "cites").glob("*.json")) == sorted(cached)
+    assert "Royle and Nichols 2003" in second
+    edit(repo, "author={Royle, J. Andrew and Nichols", "author={Rolye, J. Andrew and Nichols", "refs.bib")
+    third, _ = render.render(repo, ms, rv.rec["round"]["base"])
+    assert "Rolye and Nichols 2003" in third and "Royle and Nichols 2003" not in third
+
+
+def test_a_missing_citation_still_warns_when_the_cache_is_used(repo):
+    edit(repo, "[@royle2003]", "[@nosuch2020]")
+    ms = config.load(repo)
+    warnings = [render.render(repo, ms, None)[1] for _ in range(2)]
+    assert all("citation nosuch2020 not found" in w for w in warnings)

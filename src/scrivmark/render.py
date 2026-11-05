@@ -366,6 +366,16 @@ def tikz_cache(root: Path) -> Path:
     return d
 
 
+def cite_cache(root: Path, keep: int = 40) -> Path:
+    """Processed citations (citecache.lua), newest `keep` results."""
+    d = root / ".scrivmark" / "cache" / "cites"
+    d.mkdir(parents=True, exist_ok=True)
+    old = sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[keep:]
+    for p in old:
+        p.unlink(missing_ok=True)
+    return d
+
+
 @lru_cache(maxsize=1)
 def _math_flag() -> str:
     """--mathml became --math-method=mathml in later pandoc releases."""
@@ -379,7 +389,8 @@ def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str,
         "--template", str(ASSETS / "template.html"),
         "--lua-filter", LATEX_LUA, "--metadata", f"scrv-cache={tikz_cache(root)}",
         "--lua-filter", str(ASSETS / "scrivmark.lua"),
-        "--citeproc", "--metadata", "link-citations=true", "--metadata", "pagetitle=scrivmark",
+        "--lua-filter", str(ASSETS / "citations.lua"), "--metadata", f"scrv-cites={cite_cache(root)}",
+        "--metadata", "link-citations=true", "--metadata", "pagetitle=scrivmark",
         "--metadata", "reference-section-title=References", "--metadata", f"scrv-nonce={nonce}",
     ]
     for bib in ms.bibliography:

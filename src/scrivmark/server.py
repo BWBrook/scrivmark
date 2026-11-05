@@ -11,6 +11,7 @@ import os
 import secrets
 import socket
 import sys
+import threading
 import webbrowser
 from importlib.resources import files
 from pathlib import Path
@@ -42,6 +43,7 @@ class Viewer:
         saved = read_json(viewer_file(root), {})
         self.token = saved.get("token") or secrets.token_urlsafe(18)
         self.cache: tuple[str, dict] | None = None
+        self.lock = threading.Lock()
         self.listeners: set[asyncio.Queue] = set()
 
     # ------------------------------------------------------------ state
@@ -64,6 +66,12 @@ class Viewer:
         return (rnd["author"] or {"initials": config.identity().initials})["initials"]
 
     def state(self) -> dict:
+        """Rendering runs in a worker thread; one at a time, so a burst of
+        requests after a change renders once and the rest share the result."""
+        with self.lock:
+            return self._state()
+
+    def _state(self) -> dict:
         ms = config.load(self.root)
         rv = self.current()
         branch = gitutil.current_branch(self.root)
@@ -204,7 +212,11 @@ def build_app(viewer: Viewer) -> Starlette:
                 if origin and origin != f"{request.url.scheme}://{request.url.netloc}":
                     return JSONResponse({"error": "Cross-origin request refused."}, status_code=403)
             try:
-                result = await handler(request)
+                if asyncio.iscoroutinefunction(handler):
+                    result = await handler(request)
+                else:
+                    b = await body_of(request) if request.method == "POST" else {}
+                    result = await asyncio.to_thread(handler, request, b)
             except StaleRevision as e:
                 return JSONResponse({"error": str(e), "stale": True}, status_code=409)
             except Conflict as e:
@@ -263,7 +275,7 @@ def build_app(viewer: Viewer) -> Starlette:
             return Response(figures.placeholder(reason), media_type="image/svg+xml", headers=headers)
         return FileResponse(out, media_type="image/svg+xml", headers=headers)
 
-    async def state(request: Request):
+    def state(request: Request, b: dict):
         return JSONResponse(viewer.state())
 
     async def events(request: Request):
@@ -289,40 +301,34 @@ def build_app(viewer: Viewer) -> Starlette:
     async def body_of(request: Request) -> dict:
         return json.loads(await request.body() or b"{}")
 
-    async def comment(request: Request):
-        b = await body_of(request)
+    def comment(request: Request, b: dict):
         rv = viewer.need()
         viewer.check_render(b)
         anchor = viewer.anchor_from(rv, b)
         t = review.comment(rv, anchor, b["body"], viewer.who(rv), b.get("rev"))
         return JSONResponse(t)
 
-    async def reply(request: Request):
-        b = await body_of(request)
+    def reply(request: Request, b: dict):
         rv = viewer.need()
         return JSONResponse(review.reply(rv, b["thread"], b["body"], viewer.who(rv), b.get("rev")))
 
-    async def thread_status(request: Request):
-        b = await body_of(request)
+    def thread_status(request: Request, b: dict):
         rv = viewer.need()
         if b.get("reattach"):
             viewer.check_render(b)
             return JSONResponse(review.reattach(rv, b["thread"], viewer.anchor_from(rv, b), b.get("rev")))
         return JSONResponse(review.set_thread(rv, b["thread"], b["status"], b.get("rev")))
 
-    async def decide(request: Request):
-        b = await body_of(request)
+    def decide(request: Request, b: dict):
         rv = viewer.need()
         decision = {"accept": "accepted", "reject": "rejected"}[b["decision"]]
         return JSONResponse(review.decide(rv, b["change"], decision, viewer.who(rv), b.get("rev")))
 
-    async def undo(request: Request):
-        b = await body_of(request)
+    def undo(request: Request, b: dict):
         rv = viewer.need()
         return JSONResponse(review.undo(rv, b["change"], b.get("rev")))
 
-    async def triage(request: Request):
-        b = await body_of(request)
+    def triage(request: Request, b: dict):
         rv = viewer.need()
         if b.get("action") == "keep_all":
             return JSONResponse(review.keep_all(rv, viewer.who(rv)))
@@ -330,7 +336,7 @@ def build_app(viewer: Viewer) -> Starlette:
                           b.get("wording"), b.get("rev"))
         return JSONResponse(t or {})
 
-    async def source_get(request: Request):
+    def source_get(request: Request, b: dict):
         rel = request.query_params["file"]
         ms = config.load(viewer.root)
         if rel not in ms.sources:
@@ -341,8 +347,7 @@ def build_app(viewer: Viewer) -> Starlette:
         return JSONResponse({"file": rel, "first": first, "last": last, "text": text,
                              "file_rev": revision(viewer.root, [rel])})
 
-    async def source_put(request: Request):
-        b = await body_of(request)
+    def source_put(request: Request, b: dict):
         rv = viewer.need()
         try:
             review.replace_lines(rv, b["file"], int(b["first"]), int(b["last"]), b["text"], b["file_rev"])
@@ -351,8 +356,7 @@ def build_app(viewer: Viewer) -> Starlette:
                                 "copy it, cancel, and edit again.") from None
         return JSONResponse({"ok": True})
 
-    async def selection(request: Request):
-        b = await body_of(request)
+    def selection(request: Request, b: dict):
         rv = viewer.need()
         sel_path = local_dir(viewer.root, rv.id) / "selection.json"
         if not b.get("text"):
@@ -366,14 +370,12 @@ def build_app(viewer: Viewer) -> Starlette:
         atomic_write(sel_path, json.dumps(sel, indent=2, ensure_ascii=False))
         return JSONResponse(sel)
 
-    async def ask(request: Request):
-        b = await body_of(request)
+    def ask(request: Request, b: dict):
         rv = viewer.need()
         viewer.check_render(b)
         return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"], viewer.who(rv)))
 
-    async def ask_update(request: Request):
-        b = await body_of(request)
+    def ask_update(request: Request, b: dict):
         rv = viewer.need()
         item = next((a for a in review.asks(rv, include_done=True) if a["id"] == b["ask"]), None)
         if item is None:

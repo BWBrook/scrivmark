@@ -636,23 +636,81 @@ def revise_draft(rv: Review, did: str, body: str | None = None, wording: str | N
 
 
 def keep_all(rv: Review, who: str) -> dict:
-    """Keep every draft, in document order. A draft whose wording can no longer
-    be applied (its passage changed, perhaps by an earlier draft) stays for the
-    reviewer to edit or drop."""
+    """Keep every draft, in document order, in one transaction. A draft whose
+    wording can no longer be applied (its passage changed, or an earlier draft
+    in this batch rewrote part of it) stays for the reviewer to edit or drop."""
     order = {f: i for i, f in enumerate(rv.ms.sources)}
-
-    def place(d):
-        w = resolve(rv, d["anchor"])
-        return (order.get(d["anchor"]["file"], len(order)), w["range"][0] if w["state"] == "ok" else 0)
-
-    kept, left = [], []
-    for d in sorted(drafts(rv), key=place):
-        try:
-            triage(rv, d["id"], True, who)
+    refusal = "The draft's passage has been edited since it was written, so its wording was not applied."
+    with transaction(rv.root, None, rv.watched() + [rv.drafts_rel]) as writes:
+        rv.reload()
+        ds = read_json(rv.root / rv.drafts_rel, [])
+        placed = []
+        for d in ds:
+            w = resolve(rv, d["anchor"])
+            pos = w["range"] if w["state"] == "ok" else [0, 0]
+            placed.append((order.get(d["anchor"]["file"], len(order)), pos[0], pos[1], d, w))
+        placed.sort(key=lambda x: x[:3])
+        kept, left, edits, reach = [], [], {}, {}
+        for _, s, e, d, w in placed:
+            rel = d["anchor"]["file"]
+            if d["wording"] is not None:
+                cur = rv.text(rel)
+                if w["state"] != "ok" or w["how"] == "edited" or cur[s:e] != d["anchor"]["exact"]:
+                    left.append({"id": d["id"], "reason": refusal})
+                    continue
+                if s < reach.get(rel, 0):
+                    left.append({"id": d["id"], "reason": "It overlaps a draft kept just before it, so its wording "
+                                 "was not applied."})
+                    continue
+                reach[rel] = e
+                edits.setdefault(rel, []).append((s, e, d))
+            else:
+                _keep(rv, d, d["anchor"], who, None, writes)
             kept.append(d["id"])
-        except Conflict as e:
-            left.append({"id": d["id"], "reason": str(e)})
+        for rel, items in edits.items():
+            cur, out, shift, spans = rv.text(rel), [], 0, []
+            pos = 0
+            for s, e, d in items:
+                out += [cur[pos:s], d["wording"]]
+                spans.append((s + shift, s + shift + len(d["wording"]), d))
+                shift += len(d["wording"]) - (e - s)
+                pos = e
+            new = "".join(out) + cur[pos:]
+            writes[rel] = new
+            snap = _snapshot(rv, new)
+            for s, e, d in spans:
+                anchor = {"file": rel, "rev": snap, "range": [s, e], "exact": new[s:e],
+                          "prefix": new[max(0, s - CONTEXT) : s], "suffix": new[e : e + CONTEXT]}
+                _keep(rv, d, anchor, who, d["anchor"]["exact"], writes)
+        done = set(kept)
+        writes[rv.drafts_rel] = json.dumps([d for d in ds if d["id"] not in done], indent=2, ensure_ascii=False)
+        if kept:
+            writes[rv.record_rel] = record.dumps(rv.rec)
     return {"kept": kept, "left": left}
+
+
+def _keep(rv: Review, d: dict, anchor: dict, who: str, was: str | None, writes: dict,
+          body: str | None = None, wording: str | None = None) -> dict | None:
+    """Record a kept draft: its applied wording (when `was` is given) and its
+    comment as a thread. The caller writes the record."""
+    body = d["body"] if body is None else body
+    wording = d["wording"] if wording is None else wording
+    if was is not None and d.get("by"):
+        rv.rec.setdefault("drafted_edits", []).append(
+            {"by": d["by"], "file": anchor["file"], "was": was, "wording": wording, "at": record.now(),
+             **({"history": d["history"]} if d.get("history") else {})})
+    if not (body and body.strip()):
+        return None
+    t = {
+        "id": record.new_id("t"), "status": "open", "anchor": anchor,
+        "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": body}],
+    }
+    if d.get("by"):
+        t["messages"][0]["drafted_by"] = d["by"]
+    if d.get("history"):
+        t["messages"][0]["draft_history"] = d["history"]
+    rv.rec["threads"].append(t)
+    return t
 
 
 def _apply_wording(rv: Review, anchor: dict, wording: str, writes: dict, refusal: str) -> dict:
@@ -688,27 +746,13 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
             return None
         body = d["body"] if body is None else body
         wording = d["wording"] if wording is None else wording
-        anchor = d["anchor"]
+        anchor, was = d["anchor"], None
         if wording is not None:
             was = anchor["exact"]
             anchor = _apply_wording(rv, anchor, wording, writes, "The draft's passage has been edited since it "
                                     "was written, so its wording was not applied. Edit the draft, or drop it.")
-            if d.get("by"):
-                rv.rec.setdefault("drafted_edits", []).append(
-                    {"by": d["by"], "file": anchor["file"], "was": was, "wording": wording, "at": record.now(),
-                     **({"history": d["history"]} if d.get("history") else {})})
-                writes[rv.record_rel] = record.dumps(rv.rec)
-        t = None
-        if body and body.strip():
-            t = {
-                "id": record.new_id("t"), "status": "open", "anchor": anchor,
-                "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": body}],
-            }
-            if d.get("by"):
-                t["messages"][0]["drafted_by"] = d["by"]
-            if d.get("history"):
-                t["messages"][0]["draft_history"] = d["history"]
-            rv.rec["threads"].append(t)
+        t = _keep(rv, d, anchor, who, was, writes, body, wording)
+        if t is not None or was is not None:
             writes[rv.record_rel] = record.dumps(rv.rec)
     return t
 

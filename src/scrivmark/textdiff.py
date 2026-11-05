@@ -5,6 +5,7 @@ import re
 from bisect import bisect_right
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 from . import latex
 from .blocks import Segment, guarded_segments, pandoc_blocks
@@ -24,6 +25,7 @@ TOKEN = re.compile(
     """,
     re.X | re.S,
 )
+WORDS = re.compile(r"\s+|\w+|[^\w\s]")
 ATOMIC = {"fnref", "cite", "link", "math", "code", "attr", "ref"}
 TEXT_KINDS = {"para", "heading", "list", "footnote", "table", "div", "merged"}
 
@@ -229,10 +231,7 @@ class Projection:
             if tag == "equal":
                 self.runs.append((oo[i1], no[j1], oo[i2] - oo[i1]))
             elif tag == "replace":
-                a, b = old[oo[i1] : oo[i2]], new[no[j1] : no[j2]]
-                for blk in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
-                    if blk.size:
-                        self.runs.append((oo[i1] + blk.a, no[j1] + blk.b, blk.size))
+                self._match(old, new, oo[i1], oo[i2], no[j1], no[j2])
         self.runs.sort()
         merged: list[tuple[int, int, int]] = []
         for oa, na, n in self.runs:
@@ -242,6 +241,22 @@ class Projection:
                 merged.append((oa, na, n))
         self.runs = merged
         self.starts = [r[0] for r in self.runs]
+
+    def _match(self, old: str, new: str, a0: int, a1: int, b0: int, b1: int) -> None:
+        """Unchanged stretches within a replaced run of lines: words first, then
+        characters within each changed gap. Character matching over a whole
+        paragraph is quadratic and dominated anchor resolution."""
+        ta, tb = WORDS.findall(old, a0, a1), WORDS.findall(new, b0, b1)
+        ao, bo = _offsets(ta), _offsets(tb)
+        for tag, x1, x2, y1, y2 in SequenceMatcher(None, ta, tb, autojunk=False).get_opcodes():
+            oa, na = a0 + ao[x1], b0 + bo[y1]
+            if tag == "equal":
+                self.runs.append((oa, na, ao[x2] - ao[x1]))
+            elif tag == "replace":
+                a, b = old[oa : a0 + ao[x2]], new[na : b0 + bo[y2]]
+                for blk in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
+                    if blk.size:
+                        self.runs.append((oa + blk.a, na + blk.b, blk.size))
 
     def range(self, s: int, e: int) -> tuple[int, int] | None:
         """Project [s, e) if it lies wholly inside one unchanged stretch."""
@@ -283,6 +298,7 @@ class Projection:
         return None if r is None else r[0] + (p - s)
 
 
+@lru_cache(maxsize=64)
 def projection(old: str, new: str) -> Projection:
     return Projection(old, new)
 

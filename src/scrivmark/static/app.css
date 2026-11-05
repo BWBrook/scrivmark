@@ -232,3 +232,14 @@ span.scrv-note::after { content: "⟩"; }
 .zoomlevel { color: var(--muted); font-size: 13px; min-width: 3.5em; }
 .zoomview { flex: 1; overflow: auto; padding: 4px; }
 .zoomview img { display: block; margin: auto; background: #fff; max-width: none; }
+
+#busy { position: fixed; top: 0; left: 0; right: 0; z-index: 60; pointer-events: none; }
+#busy[hidden] { display: none; }
+.busybar { height: 3px; overflow: hidden; position: relative; }
+.busybar::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 30%; background: var(--accent);
+  animation: busy 1.2s ease-in-out infinite; }
+@keyframes busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.busylabel { position: absolute; top: 8px; right: 14px; padding: 3px 11px; border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--paper); color: var(--muted); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: 0 1px 4px rgb(0 0 0 / .12); }
+@media (prefers-reduced-motion: reduce) { .busybar::after { animation: none; width: 100%; opacity: .5; } }

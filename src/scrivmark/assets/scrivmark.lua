@@ -1,4 +1,4 @@
--- scrivmark render filter. Runs before citeproc.
+-- scrivmark render filter. Runs before citations.lua.
 --  * numbers Quarto-style cross-references (fig, tbl, eq, sec) in current text;
 --  * keeps deleted material out of numbering and the bibliography, rendering
 --    its citations separately;
@@ -6,6 +6,7 @@
 --  * neutralises link and image targets with unsafe schemes.
 
 local stringify = pandoc.utils.stringify
+local cache = dofile(pandoc.path.join({ pandoc.path.directory(PANDOC_SCRIPT_FILE), "citecache.lua" }))
 local nonce = ""
 local TRUSTED_KEYS = { file = true, lines = true, c = true }
 local SAFE_KEYS = { width = true, height = true, title = true, lang = true, dir = true }
@@ -250,7 +251,7 @@ local function render_deleted_cites(doc)
   for k, v in pairs(doc.meta) do m[k] = v end
   m["suppress-bibliography"] = true
   m = pandoc.Meta(m)
-  local ok, done = pcall(pandoc.utils.citeproc, pandoc.Pandoc(paras, m))
+  local ok, done = pcall(cache.citeproc, pandoc.Pandoc(paras, m), cache.dir(doc.meta))
   if not ok then io.stderr:write("scrivmark: deleted citations not rendered: " .. tostring(done) .. "\n"); return doc end
   local rendered = {}
   for i, para in ipairs(done.blocks) do

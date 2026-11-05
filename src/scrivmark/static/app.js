@@ -10,14 +10,41 @@ const PLACEHOLDER = "￼";
 
 history.replaceState(null, "", "/");
 
-async function api(path, body) {
+// Shown after a short delay, so quick requests don't flash it, and hidden after
+// another, so a save followed by the page refresh reads as one piece of work.
+const busy = { n: 0, label: "", show: null, hide: null };
+
+function working(label) {
+  busy.n++;
+  busy.label = label;
+  clearTimeout(busy.hide);
+  const box = $("#busy");
+  if (!box.hidden) box.querySelector(".busylabel").textContent = label;
+  else if (!busy.show) busy.show = setTimeout(() => {
+    busy.show = null;
+    if (!busy.n) return;
+    box.querySelector(".busylabel").textContent = busy.label;
+    box.hidden = false;
+  }, 250);
+  return () => {
+    if (--busy.n) return;
+    clearTimeout(busy.show);
+    busy.show = null;
+    busy.hide = setTimeout(() => { if (!busy.n) $("#busy").hidden = true; }, 300);
+  };
+}
+
+async function api(path, body, label) {
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   };
-  const r = await fetch(path, opts);
-  const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-  if (!r.ok) throw Object.assign(new Error(j.error || "Something went wrong"), j);
-  return j;
+  const end = working(label || (body === undefined ? "Updating the page…" : "Saving…"));
+  try {
+    const r = await fetch(path, opts);
+    const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+    if (!r.ok) throw Object.assign(new Error(j.error || "Something went wrong"), j);
+    return j;
+  } finally { end(); }
 }
 
 function el(tag, attrs = {}, ...kids) {
@@ -459,12 +486,15 @@ window.addEventListener("resize", () => { if (zoombox.open && zoomFit) setZoom(1
 function keepAllBar(drafts) {
   const edits = drafts.filter(d => d.wording !== null).length;
   const what = `${drafts.length} draft${drafts.length === 1 ? "" : "s"}` + (edits ? `, applying ${edits} edit${edits === 1 ? "" : "s"}` : "");
-  const go = async () => {
+  const go = async ev => {
     if (!confirm(`Keep all ${what}? Drafts become your comments, and edits become your tracked changes. Any you want back can be undone like any other edit or comment.`)) return;
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Keeping…";
     try {
-      const r = await api("/api/draft", { action: "keep_all" });
+      const r = await api("/api/draft", { action: "keep_all" }, `Keeping ${what}…`);
       notice(`Kept ${r.kept.length}.` + (r.left.length ? ` ${r.left.length} left for you: their passage changed, so edit or drop them.` : ""), 8000);
-    } catch (e) { fail(e); }
+    } catch (e) { btn.disabled = false; btn.textContent = `Keep all ${what}`; fail(e); }
   };
   return el("div", { class: "keepall" },
     el("div", { class: "muted small" }, "Done with the ones you wanted to change or drop?"),
@@ -638,10 +668,14 @@ async function startEdit(block) {
     if (e.key === "Escape") cancel();
   });
   async function save() {
+    const btn = $("button.primary", box);
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Saving…";
     try {
       await api("/api/source", { file: src.file, first: src.first, last: src.last, text: ta.value, file_rev: src.file_rev });
       done();
-    } catch (e) { notice(e.message, 12000); }
+    } catch (e) { btn.disabled = false; btn.textContent = "Save"; notice(e.message, 12000); }
   }
   function cancel() { box.replaceWith(block); done(); }
   function done() { S.editing = null; load(true); }
