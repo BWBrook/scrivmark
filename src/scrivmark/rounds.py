@@ -142,7 +142,8 @@ def _return_locked(root: Path) -> dict:
     returned = gitutil.rev(root, "HEAD")
     rv.rec["changes"] = catalogue(root, rv.ms, rv.rec["round"]["base"], returned)
     orphans = rebase_anchors(rv, returned)
-    rv.rec["round"].update({"status": "returned", "returned": returned, "integrated": rv.rec["round"]["base"]})
+    rv.rec["round"].update({"status": "returned", "returned": returned, "returned_at": record.now(),
+                           "integrated": rv.rec["round"]["base"]})
     archive_asks(rv)
     record.path(root, rv.id).write_text(record.dumps(rv.rec))
     _commit(root, f"scrivmark: return review round {rv.id}", [rv.record_rel])

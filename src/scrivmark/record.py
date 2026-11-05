@@ -31,6 +31,7 @@ SCHEMA = {
                 "author_branch": {"type": "string"},
                 "base": {"type": "string"},
                 "returned": {"type": ["string", "null"]},
+                "returned_at": {"type": "string"},
                 "integrated": {"type": ["string", "null"]},
                 "closed": {"type": ["string", "null"]},
                 "status": {"enum": ["open", "returned", "closed"]},
@@ -90,6 +91,7 @@ SCHEMA = {
                                 "at": {"type": "string"},
                                 "body": {"type": "string"},
                                 "imported_at": {"type": "string"},
+                                "edited_at": {"type": "string"},
                                 "drafted_by": {"type": "string"},
                                 "draft_history": {"type": "array", "items": {"type": "object", "properties": {
                     "body": {"type": "string"}, "wording": {"type": ["string", "null"]}, "at": {"type": "string"},

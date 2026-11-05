@@ -494,14 +494,26 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
 
 
 @app.command()
-def revise(draft_id: str,
+def revise(item_id: Annotated[str, typer.Argument(help="A draft id (d-…), or a message id (m-…) to edit a comment.")],
            body: Annotated[Optional[str], typer.Option(help="New comment text.")] = None,
            wording: Annotated[Optional[str], typer.Option(help="New replacement text.")] = None,
            clear_wording: Annotated[bool, typer.Option("--clear-wording", help="Make it a comment with no edit.")] = False,
            by: Annotated[Optional[str], typer.Option(help="Who is revising, if not the draft's author. Default: $SCRIVMARK_AGENT.")] = None,
            expect: Expect = None, as_json: Json = False):
-    """Amend a draft's body or wording in place. It keeps its author; earlier
-    versions are kept as its history."""
+    """Amend a draft's body or wording in place, keeping its author and its
+    earlier versions. Given a message id, edit one of your own comments before
+    the other side has seen it."""
+    if item_id.startswith("m-"):
+        if wording is not None or clear_wording or body is None:
+            raise ScrivError("A comment has only text to change: give --body.")
+        rv = review.active(_root())
+        tid = next((t["id"] for t in rv.rec["threads"] for m in t["messages"] if m["id"] == item_id), None)
+        if tid is None:
+            raise ScrivError(f"No message {item_id} in this round.")
+        t = review.edit_message(rv, tid, item_id, body, _who(rv), expect)
+        _emit(t, as_json, f"Edited {item_id} in thread {tid}.")
+        return
+    draft_id = item_id
     if body is None and wording is None and not clear_wording:
         raise ScrivError("Give --body, --wording or --clear-wording.")
     rv = review.active(_root())

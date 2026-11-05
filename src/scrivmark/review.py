@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from . import config, gitutil, latex, record
@@ -497,6 +498,43 @@ def reply(rv: Review, tid: str, body: str, who: str, expect: str | None = None) 
         t = _thread(rv, tid)
         t["messages"].append({"id": record.new_id("m"), "by": who, "at": record.now(), "body": body})
         t["status"] = "open"
+        writes[rv.record_rel] = record.dumps(rv.rec)
+    return t
+
+
+def can_edit(rv: Review, m: dict, who: str) -> bool:
+    """A message can be changed by whoever wrote it until the other side has
+    seen it: the reviewer's until the round is returned, the author's (written
+    since the return) until it is closed."""
+    rnd = rv.rec["round"]
+    if m.get("by") != who:
+        return False
+    if rnd["status"] == "open":
+        return True
+    if rnd["status"] == "returned" and rnd.get("returned_at") and who == (rnd["author"] or {}).get("initials"):
+        return datetime.fromisoformat(m["at"]) >= datetime.fromisoformat(rnd["returned_at"])
+    return False
+
+
+def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: str | None = None) -> dict:
+    """Change the text of one of your own messages before the other side has
+    seen it. If an agent drafted it, the drafted text stays in its history."""
+    if not body.strip():
+        raise ScrivError("A comment needs some text.")
+    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+        rv.reload()
+        t = _thread(rv, tid)
+        m = next((x for x in t["messages"] if x["id"] == mid), None)
+        if m is None:
+            raise ScrivError(f"No message {mid} in thread {tid}")
+        if not can_edit(rv, m, who):
+            raise ScrivError("Only your own messages can be edited, and only until the other side has seen them "
+                             "(the reviewer's until the round is returned, the author's until it is closed).")
+        if m.get("drafted_by"):
+            m.setdefault("draft_history", []).append(
+                {"body": m["body"], "at": m.get("edited_at") or m["at"], "by": who if m.get("edited_at") else m["drafted_by"]})
+        m["body"] = body
+        m["edited_at"] = record.now()
         writes[rv.record_rel] = record.dumps(rv.rec)
     return t
 

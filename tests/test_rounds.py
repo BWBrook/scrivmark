@@ -345,3 +345,40 @@ def test_keep_all_applies_neighbouring_edits_and_anchors_their_threads(repo):
         s, e = t["where"]["range"]
         assert text[s:e] == t["anchor"]["exact"]
     assert {e["wording"] for e in rv.rec["drafted_edits"]} == {"should", "thermal effects"}
+
+
+def test_own_comments_can_be_edited_until_the_other_side_has_seen_them(repo, monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from scrivmark.cli import app
+    rv = rounds.start(repo)
+    mine = review.comment(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"),
+                          "A caveat rather than a finding.", "BWB")
+    review.add_draft(rv, review.anchor_quote(rv, "paper.md", "should should"), "Doubled.", None, by="Terra")
+    review.keep_all(review.active(repo), "BWB")
+    rv = review.active(repo)
+    drafted = next(t for t in rv.rec["threads"] if t["messages"][0].get("drafted_by"))
+    review.edit_message(rv, mine["id"], mine["messages"][0]["id"], "A caveat.", "BWB")
+    review.edit_message(rv, drafted["id"], drafted["messages"][0]["id"], "Doubled word.", "BWB")
+    rv = review.active(repo)
+    m = review._thread(rv, mine["id"])["messages"][0]
+    assert m["body"] == "A caveat." and m["edited_at"] and "draft_history" not in m
+    d = review._thread(rv, drafted["id"])["messages"][0]
+    assert d["body"] == "Doubled word." and d["draft_history"][-1] == {"body": "Doubled.", "at": d["at"], "by": "Terra"}
+    with pytest.raises(ScrivError):
+        review.edit_message(rv, mine["id"], mine["messages"][0]["id"], "Not mine to change.", "SS")
+    r = CliRunner().invoke(app, ["revise", mine["messages"][0]["id"], "--body", "A caveat, stated."])
+    assert r.exit_code == 0, r.output
+    assert review._thread(review.active(repo), mine["id"])["messages"][0]["body"] == "A caveat, stated."
+
+    info = rounds.return_round(repo, push=False)
+    with pytest.raises(ScrivError):
+        review.edit_message(review.active(repo), mine["id"], mine["messages"][0]["id"], "Too late.", "BWB")
+    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
+    rounds.open_round(repo, info["round"])
+    rv = review.active(repo)
+    t = review.reply(rv, mine["id"], "Agreed, will fix.", "SS")
+    reply_id = t["messages"][-1]["id"]
+    assert not review.can_edit(rv, t["messages"][0], "SS") and review.can_edit(rv, t["messages"][-1], "SS")
+    review.edit_message(rv, mine["id"], reply_id, "Agreed; fixed.", "SS")
+    assert review._thread(review.active(repo), mine["id"])["messages"][-1]["body"] == "Agreed; fixed."

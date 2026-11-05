@@ -239,3 +239,19 @@ def test_version_is_stated_once_per_file_and_has_a_changelog_entry():
     assert f"## {__version__} " in (root / "CHANGELOG.md").read_text()
     assert f"version: {__version__}" in (root / "CITATION.cff").read_text()
     assert CliRunner().invoke(app, ["--version"]).output.strip() == f"scrivmark {__version__}"
+
+
+def test_viewer_marks_and_edits_your_own_comments(repo):
+    rounds.start(repo)
+    viewer = Viewer(repo)
+    client = TestClient(build_app(viewer), base_url="http://127.0.0.1")
+    client.cookies.set(viewer.cookie, viewer.token)
+    t = client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows", "body": "Hm."}).json()
+    mid = t["messages"][0]["id"]
+    st = client.get("/api/state").json()
+    assert st["threads"][0]["editable"] == [mid]
+    r = client.post("/api/message", json={"thread": t["id"], "message": mid, "body": "Hm, why?", "rev": st["rev"]})
+    assert r.status_code == 200
+    st = client.get("/api/state").json()
+    assert st["threads"][0]["messages"][0]["body"] == "Hm, why?" and st["threads"][0]["messages"][0]["edited_at"]
+    assert client.post("/api/message", json={"thread": t["id"], "message": mid, "body": " "}).status_code == 400

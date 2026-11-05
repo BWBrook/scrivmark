@@ -279,6 +279,7 @@ function buildMargin() {
     c.addEventListener("click", () => setActive(it.id, false));
     margin.append(c);
     if (S.compose[`${it.kind}:${it.id}`]) reopen[it.kind](c, it, true);
+    if (it.kind === "thread") for (const m of it.messages) if (S.compose[`msg:${it.id}:${m.id}`]) editMessage(c, it, m, true);
   }
   if (focusKey) {
     const ta = $(`textarea[data-key="${focusKey}"]`, margin);
@@ -318,7 +319,13 @@ function threadCard(t) {
   const c = el("div", { class: `card ${t.status}${orphan ? " orphan" : ""}`, tabindex: "-1" },
     orphan ? el("div", { class: "tag" }, "Lost its place: its passage was rewritten past recognition") : null,
     quoteLine(t),
-    ...t.messages.map(m => el("div", { class: "msg" }, el("span", { class: "by" }, m.by), m.body)));
+    ...t.messages.map(m => el("div", { class: "msg", "data-m": m.id },
+      (t.editable || []).includes(m.id)
+        ? el("button", { class: "msgedit", title: "Edit your comment (until the other side has seen it)",
+            onclick: e => { e.stopPropagation(); editMessage(c, t, m); } }, "Edit")
+        : null,
+      el("span", { class: "by" }, m.by), m.body,
+      m.edited_at ? el("span", { class: "muted small" }, " (edited)") : null)));
   if (!S.st.round || S.st.mode === "closed") return c;
   c.append(el("div", { class: "acts" },
     orphan ? el("button", { class: "primary", title: "Select the passage in the text first",
@@ -423,6 +430,28 @@ function replyBox(card, t, restoring = false) {
   card.append(ta, el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, "Send"),
     el("button", { onclick: () => closeComposer(key) }, "Cancel")));
   if (!restoring) ta.focus();
+  layoutMargin();
+}
+
+function editMessage(card, t, m, restoring = false) {
+  const row = $(`.msg[data-m="${m.id}"]`, card);
+  if (!row || $("textarea", row)) return;
+  const key = `msg:${t.id}:${m.id}`;
+  S.compose[key] = S.compose[key] || { text: m.body };
+  const ta = composer(key, "text", "Comment");
+  const save = async () => {
+    if (!ta.value.trim()) { notice("A comment needs some text.", 6000); return; }
+    try {
+      await api("/api/message", { thread: t.id, message: m.id, body: ta.value, rev: S.st.rev });
+      delete S.compose[key]; S.focus = null;
+    } catch (e) { fail(e); }
+  };
+  ta.addEventListener("click", e => e.stopPropagation());
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save(); if (e.key === "Escape") closeComposer(key); });
+  row.replaceChildren(el("span", { class: "by" }, m.by), ta, el("div", { class: "acts" },
+    el("button", { class: "primary", onclick: e => { e.stopPropagation(); save(); } }, "Save"),
+    el("button", { onclick: e => { e.stopPropagation(); closeComposer(key); } }, "Cancel")));
+  if (!restoring) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   layoutMargin();
 }
 

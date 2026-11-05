@@ -104,7 +104,9 @@ class Viewer:
             "threads": [], "drafts": [], "asks": [], "changes": [],
         }
         if rv:
-            data["threads"] = [self._place(rv, t) for t in review.threads(rv)]
+            me = self.who(rv)
+            data["threads"] = [dict(self._place(rv, t), editable=[m["id"] for m in t["messages"] if review.can_edit(rv, m, me)])
+                               for t in review.threads(rv)]
             if rv.status == "open":
                 data["drafts"] = [self._place(rv, d) for d in review.drafts(rv)]
             if rv.status in ("open", "returned"):
@@ -312,6 +314,10 @@ def build_app(viewer: Viewer) -> Starlette:
         rv = viewer.need()
         return JSONResponse(review.reply(rv, b["thread"], b["body"], viewer.who(rv), b.get("rev")))
 
+    def message(request: Request, b: dict):
+        rv = viewer.need()
+        return JSONResponse(review.edit_message(rv, b["thread"], b["message"], b["body"], viewer.who(rv), b.get("rev")))
+
     def thread_status(request: Request, b: dict):
         rv = viewer.need()
         if b.get("reattach"):
@@ -404,6 +410,7 @@ def build_app(viewer: Viewer) -> Starlette:
         Route("/api/comment", guard(comment, True), methods=["POST"]),
         Route("/api/reply", guard(reply, True), methods=["POST"]),
         Route("/api/thread", guard(thread_status, True), methods=["POST"]),
+        Route("/api/message", guard(message, True), methods=["POST"]),
         Route("/api/decide", guard(decide, True), methods=["POST"]),
         Route("/api/draft", guard(triage, True), methods=["POST"]),
         Route("/api/undo", guard(undo, True), methods=["POST"]),

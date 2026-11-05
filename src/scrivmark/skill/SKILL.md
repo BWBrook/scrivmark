@@ -96,6 +96,12 @@ author: accept, reject, reply, resolve, edit.
   version is kept as its history and goes into the record if the draft is
   kept. Pass `--by` if you are not the draft's author, and `--expect` to guard
   against concurrent changes.
+- **Editing a comment.** `scrivmark revise m-… --body "..."` changes a message
+  in a thread (the `m-` id from `scrivmark threads --json`). Only the side that
+  wrote it can, and only until the other side has seen it: the reviewer's
+  messages until the round is returned, the author's until it is closed. Edit
+  the human's own comments only when they ask you to. In the viewer, the same
+  edit is the Edit button on the message.
 - **Line edits from a second agent.** When another agent has already edited
   the files in this round, propose your edits as drafts with `wording` and an
   empty `body` instead of editing files: each shows as "Line edit, no

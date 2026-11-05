@@ -243,3 +243,6 @@ span.scrv-note::after { content: "⟩"; }
   background: var(--paper); color: var(--muted); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
   box-shadow: 0 1px 4px rgb(0 0 0 / .12); }
 @media (prefers-reduced-motion: reduce) { .busybar::after { animation: none; width: 100%; opacity: .5; } }
+
+.card .msgedit { float: right; margin-left: 6px; padding: 0 7px; font-size: 11px; line-height: 18px; opacity: .55; }
+.card:hover .msgedit, .card .msgedit:focus { opacity: 1; }

@@ -10,6 +10,14 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## Unreleased
+
+- **Edit your own comments** until the other side has seen them: the
+  reviewer's until the round is returned, the author's until it is closed.
+  Use the Edit button on the message in the viewer, or `scrivmark revise m-…
+  --body` from the command line. An edited message is marked as edited. If an
+  agent drafted it, its drafted text stays in the record.
+
 ## 0.2.0 (5 November 2026)
 
 The first tagged release. If you installed scrivmark before 5 November 2026,
