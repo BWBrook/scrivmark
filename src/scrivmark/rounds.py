@@ -119,22 +119,26 @@ def request(root: Path, reviewer_name: str, reviewer_initials: str, github_user:
     return rv
 
 
-def return_round(root: Path, push: bool = True) -> dict:
+def return_round(root: Path, push: bool = True, statement: str | None = None) -> dict:
     """Return a round, or finish publishing one already returned."""
     with transaction(root):
         rv = active(root)
+        if rv.status == "returned" and statement is not None:
+            raise ScrivError("This round is already returned; its statement can no longer change.")
         if rv.status == "returned":
             info = {"round": rv.id, "returned": rv.rec["round"]["returned"], "changes": len(rv.rec["changes"]),
                     "threads": len(rv.rec["threads"]), "orphans": [], "resumed": True}
         else:
-            info = _return_locked(root)
+            info = _return_locked(root, statement)
     return _publish_return(root, info, push)
 
 
-def _return_locked(root: Path) -> dict:
+def _return_locked(root: Path, statement: str | None = None) -> dict:
     rv = active(root)
     if rv.status != "open":
         raise ScrivError(f"Round {rv.id} is {rv.status}, not open.")
+    if statement is not None and not statement.strip():
+        raise ScrivError("The statement needs some text.")
     left = drafts(rv)
     if left:
         raise ScrivError(f"{len(left)} draft comment(s) still need keeping or dropping before you return the round.")
@@ -144,6 +148,8 @@ def _return_locked(root: Path) -> dict:
     orphans = rebase_anchors(rv, returned)
     rv.rec["round"].update({"status": "returned", "returned": returned, "returned_at": record.now(),
                            "integrated": rv.rec["round"]["base"]})
+    if statement is not None:
+        rv.rec["round"]["statement"] = statement.strip()
     archive_asks(rv)
     record.path(root, rv.id).write_text(record.dumps(rv.rec))
     _commit(root, f"scrivmark: return review round {rv.id}", [rv.record_rel])

@@ -243,9 +243,11 @@ def request(reviewer: Annotated[str, typer.Option(help="Reviewer's name.")],
 
 @app.command("return")
 def return_(push: Annotated[bool, typer.Option(help="Push the round to origin if there is one.")] = True,
+            statement: Annotated[Optional[str], typer.Option(
+                help="Restate how this review was done (replaces the one set at start).")] = None,
             as_json: Json = False):
     """Hand the review back to the author (reviewer)."""
-    info = rounds.return_round(_root(), push)
+    info = rounds.return_round(_root(), push, statement)
     msg = f"Returned round {info['round']}: {info['changes']} changes, {info['threads']} comments."
     if info["orphans"]:
         msg += f"\nWarning: {len(info['orphans'])} comment(s) lost their passage: {', '.join(info['orphans'])}"

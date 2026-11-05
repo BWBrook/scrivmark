@@ -382,3 +382,13 @@ def test_own_comments_can_be_edited_until_the_other_side_has_seen_them(repo, mon
     assert not review.can_edit(rv, t["messages"][0], "SS") and review.can_edit(rv, t["messages"][-1], "SS")
     review.edit_message(rv, mine["id"], reply_id, "Agreed; fixed.", "SS")
     assert review._thread(review.active(repo), mine["id"])["messages"][-1]["body"] == "Agreed; fixed."
+
+
+def test_return_can_restate_how_the_review_was_done(repo):
+    rounds.start(repo)
+    with pytest.raises(ScrivError):
+        rounds.return_round(repo, push=False, statement="  ")
+    rounds.return_round(repo, push=False, statement="Reviewed with Claude and Codex.")
+    assert review.active(repo).rec["round"]["statement"] == "Reviewed with Claude and Codex."
+    with pytest.raises(ScrivError, match="already returned"):
+        rounds.return_round(repo, push=False, statement="Changed my mind.")

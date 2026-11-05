@@ -10,6 +10,11 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## Unreleased
+
+- `scrivmark return --statement "..."` restates how the review was done, for
+  when the agents or methods changed after the round started.
+
 ## 0.3.0 (5 November 2026)
 
 - **Edit your own comments** until the other side has seen them: the
