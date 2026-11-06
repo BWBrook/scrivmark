@@ -181,6 +181,22 @@ code{font-size:.9em;background:#f4f4f4;padding:0 .2em}hr{border:0;border-top:1px
 </style>
 """
 
+TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$pagetitle$</title>
+$for(header-includes)$
+$header-includes$
+$endfor$
+</head>
+<body>
+$body$
+</body>
+</html>
+"""
+
 FILTER = """
 local ok = {http = true, https = true, mailto = true}
 function Link(l)
@@ -202,11 +218,12 @@ def html(rv: Review) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         (Path(tmp) / "head.html").write_text(STYLE)
         (Path(tmp) / "clean.lua").write_text(FILTER)
+        (Path(tmp) / "page.html").write_text(TEMPLATE)
         proc = subprocess.run(
             ["pandoc", "-f", "markdown-raw_html-raw_tex-raw_attribute-yaml_metadata_block-pandoc_title_block-tex_math_dollars-citations"
              "-link_attributes-inline_code_attributes-fenced_code_attributes-header_attributes-bracketed_spans"
              "-fenced_divs-native_divs-native_spans",
-             "-t", "html5", "-s", "--sandbox", "--no-highlight", "-M", f"pagetitle=Review of {title}", "-H", str(Path(tmp) / "head.html"),
+             "-t", "html5", "-s", "--template", str(Path(tmp) / "page.html"), "--sandbox", "--no-highlight", "-M", f"pagetitle=Review of {title}", "-H", str(Path(tmp) / "head.html"),
              "--lua-filter", str(Path(tmp) / "clean.lua")],
             input=markdown(rv), capture_output=True, text=True)
     if proc.returncode != 0:
