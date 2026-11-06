@@ -396,3 +396,178 @@ def list_rounds(root: Path) -> list[dict]:
             out.append({"id": rid, "status": status, "where": line})
             seen.add(rid)
     return out
+
+
+# ---------------------------------------------------------------- preview
+
+
+def _check(kind: str, ok: bool, text: str, **extra) -> dict:
+    return {"kind": kind, "ok": ok, "text": text, **extra}
+
+
+def _working_tree(root: Path) -> str:
+    """The tree `_commit_work` would commit (index plus tracked-file edits),
+    built in a throwaway copy of the index; no ref, file or index of the
+    repository changes (it adds loose objects, which git prunes)."""
+    import os
+    import tempfile
+
+    real = Path(gitutil.git(root, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = Path(tmp) / "index"
+        env = dict(os.environ, GIT_INDEX_FILE=str(idx))
+        steps = [["add", "-u"], ["write-tree"]]
+        if real.exists():
+            shutil.copy(real, idx)
+        else:
+            steps.insert(0, ["read-tree", "HEAD"])
+        for args in steps:
+            proc = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, env=env)
+            if proc.returncode != 0:
+                raise ScrivError(f"git {' '.join(args)} failed:\n{proc.stderr.strip()}")
+        return proc.stdout.strip()
+
+
+def _publication(root: Path, rv: Review, branch: str) -> dict:
+    remote = gitutil.has_remote(root)
+    on_github = remote and _on_github(root)
+    pub = {"remote": gitutil.git(root, "remote", "get-url", "origin").strip() if remote else None,
+           "branch": branch, "github": bool(on_github), "gh": _gh(), "pr": None}
+    if on_github and pub["gh"]:
+        try:
+            pub["pr"] = subprocess.run(["gh", "pr", "view", branch], cwd=root, capture_output=True,
+                                       timeout=20).returncode == 0
+        except subprocess.TimeoutExpired:
+            pub["pr"] = None
+    return pub
+
+
+def _stray(root: Path) -> list[str]:
+    return [p for p in gitutil.untracked(root) if not is_managed(p)]
+
+
+def _ids(xs: list[str]) -> str:
+    return ", ".join(xs[:8]) + (f" and {len(xs) - 8} more" if len(xs) > 8 else "")
+
+
+def preflight(root: Path, round_id: str | None = None, statement: str | None = None, push: bool = True,
+              force: bool = False) -> dict:
+    """What the next transition of the round would do, with the options the
+    command would be given. It changes no file, ref, tag or index; computing
+    the change count may leave a few unreferenced git objects, which git
+    prunes in its own time.
+
+    Returns {"transition": "return"|"close"|None, "ready": bool, "round",
+    "checks": [{kind, ok, text}], "blockers": [{kind, text, ...}],
+    "notes": [...], "will": [...], ...} plus transition-specific fields."""
+    rv = active(root, round_id)
+    rnd = rv.rec["round"]
+    base = {"round": rv.id, "status": rv.status}
+    if rv.status == "closed":
+        return {**base, "transition": None, "ready": False, "checks": [], "blockers": [],
+                "notes": ["closed"], "will": []}
+    if rv.status == "open":
+        out = _preflight_return(root, rv, statement, push)
+    else:
+        out = _preflight_close(root, rv, push)
+        if force:
+            for c in out["checks"]:
+                if not c["ok"] and c.get("forceable"):
+                    c["ok"] = True
+                    out["notes"].append(f"--force closes anyway, and the record says so: {c['text']}")
+    out["blockers"] = [{k: v for k, v in c.items() if k != "ok"} for c in out["checks"] if not c["ok"]]
+    out["ready"] = not out["blockers"]
+    return {**base, **out}
+
+
+def _preflight_return(root: Path, rv: Review, restated: str | None = None, push: bool = True) -> dict:
+    rnd = rv.rec["round"]
+    ms = rv.ms
+    checks, notes = [], []
+    left = drafts(rv)
+    ids = [d["id"] for d in left]
+    checks.append(_check("drafts", not left,
+                         f"{len(left)} draft comment(s) still to keep or drop: {_ids(ids)}" if left
+                         else "No drafts waiting", count=len(left), ids=ids))
+    stray = _stray(root)
+    checks.append(_check("untracked", not stray,
+                         f"{len(stray)} new file(s) not in git (`git add` or delete them): {_ids(stray)}" if stray
+                         else "No stray untracked files", files=stray))
+    statement = rnd["statement"] if restated is None else restated
+    checks.append(_check("statement", bool(statement.strip()), "Statement is set" if statement.strip()
+                         else "The statement is empty"))
+    tree = _working_tree(root)
+    entries = [e for e in gitutil.name_status(root, rnd["base"], tree) if not is_managed(e[1])]
+    files = sorted({e[1] for e in entries})
+    cs = catalogue(root, ms, rnd["base"], tree)
+    ts = threads(rv)
+    lost = [t["id"] for t in ts if t["where"]["state"] != "ok"]
+    ambiguous = [t["id"] for t in ts if t["where"]["state"] != "ok" and t["where"].get("why") == "ambiguous"]
+    if lost:
+        notes.append(f"{len(lost)} comment(s) have lost their passage ({len(ambiguous)} ambiguous): {_ids(lost)}")
+    if not cs:
+        notes.append("No edits will be recorded; only comments go back")
+    pub = _publication(root, rv, f"{BRANCH_PREFIX}{rv.id}")
+    if not push:
+        pub["remote"] = None
+    will = [f"Commit reviewer edits ({len(files)} file(s)) and record {len(cs)} change(s), {len(ts)} comment thread(s)",
+            f"Tag scrivmark/{rv.id}/base and /returned"]
+    if pub["remote"]:
+        will.append(f"Push {pub['branch']} to origin ({pub['remote']})")
+        if pub["github"] and pub["gh"]:
+            will.append("Update the pull request" if pub["pr"] else "Open a pull request")
+        elif pub["github"]:
+            notes.append("`gh` is not installed, so no pull request will be made")
+    else:
+        will.append("Nothing is pushed" + (" (--no-push)" if not push else " (no remote)"))
+    return {"transition": "return", "checks": checks, "notes": notes, "will": will,
+            "files": files, "changes": len(cs), "threads": len(ts), "lost_comments": lost,
+            "statement": statement, "publication": pub}
+
+
+def _preflight_close(root: Path, rv: Review, push: bool = True) -> dict:
+    rnd = rv.rec["round"]
+    from .review import changes as list_changes
+    checks, notes = [], []
+    cs = list_changes(rv)
+    pending = [c["id"] for c in cs if c["state"] == "pending"]
+    open_threads = [t["id"] for t in threads(rv) if t["status"] == "open"]
+    checks.append(_check("pending", not pending,
+                         f"{len(pending)} change(s) still need accepting or rejecting: {_ids(pending)}" if pending
+                         else "Every change is decided", ids=pending, forceable=True))
+    checks.append(_check("open_threads", not open_threads,
+                         f"{len(open_threads)} comment thread(s) still open: {_ids(open_threads)}" if open_threads
+                         else "Every comment thread is settled", ids=open_threads, forceable=True))
+    stray = _stray(root)
+    checks.append(_check("untracked", not stray,
+                         f"{len(stray)} new file(s) not in git (`git add` or delete them): {_ids(stray)}" if stray
+                         else "No stray untracked files", files=stray))
+    target = rnd["author_branch"]
+    moved = False
+    if gitutil.ok(root, "rev-parse", "--verify", "-q", f"refs/heads/{target}"):
+        moved = _author_tip(root, target) != rnd["integrated"]
+    else:
+        notes.append(f"Author branch {target} does not exist locally")
+    if moved:
+        notes.append(f"{target} has moved since the round; closing merges it in first, and may undecide "
+                     "accepted changes it disturbs (the counts above are before that merge)")
+    if pending or open_threads:
+        notes.append("`scrivmark close --force` closes anyway and records that it was forced")
+    decisions = {k: sum(1 for c in cs if c["state"] == k) for k in ("accepted", "rejected", "superseded")}
+    uncommitted = [p for p in gitutil.dirty_paths(root) if not is_managed(p)]
+    if uncommitted:
+        notes.append(f"{len(uncommitted)} uncommitted edit(s) will be committed as author responses")
+    pub = _publication(root, rv, f"{BRANCH_PREFIX}{rv.id}")
+    if not push:
+        pub["remote"] = None
+    will = [f"Record the decisions and close the round",
+            f"Merge {BRANCH_PREFIX}{rv.id} into {target}"]
+    if pub["remote"]:
+        will.append(f"Push to origin ({pub['remote']})" + (" and merge the pull request"
+                    if pub["github"] and pub["gh"] and pub["pr"] else ""))
+    else:
+        will.append("Nothing is pushed" + (" (--no-push)" if not push else " (no remote)"))
+    return {"transition": "close", "checks": checks, "notes": notes, "will": will,
+            "decisions": decisions, "pending": pending, "open_threads": open_threads,
+            "author_moved": moved, "merge_target": target,
+            "push_target": f"origin/{target}" if pub["remote"] else None, "publication": pub}

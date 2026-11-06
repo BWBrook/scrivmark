@@ -1,6 +1,6 @@
 "use strict";
 
-const S = { st: null, key: null, editing: null, active: null, cur: -1, selPosted: false, compose: {} };
+const S = { st: null, key: null, editing: null, active: null, cur: -1, selPosted: false, compose: {}, popDraft: null, edits: {} };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const doc = $("#doc"), margin = $("#margin"), tool = $("#tool"), pop = $("#pop");
@@ -67,6 +67,64 @@ function notice(msg, ms, action) {
   if (ms) notice.t = setTimeout(() => (n.hidden = true), ms);
 }
 
+// Unsent work (replies, comment edits, the selection popup, source edits) is
+// kept in this browser per round, so a reload, a refresh or a stale selection
+// does not lose it.
+let workTimer = null;
+const touched = new Set();
+
+function workKey() { return S.st && S.st.round ? `scrivmark-work:${S.st.round.id}` : null; }
+
+// Several tabs may be open on one round, so only the entries this tab has
+// touched are written or removed; another tab's unsent work is left alone.
+function saveWork(now = false, ...keys) {
+  keys.forEach(k => touched.add(k));
+  clearTimeout(workTimer);
+  const write = () => {
+    const k = workKey();
+    if (!k || !touched.size) return;
+    let data;
+    try { data = JSON.parse(localStorage.getItem(k) || "null") || {}; } catch { data = {}; }
+    data.compose = data.compose || {};
+    data.edits = data.edits || {};
+    for (const t of touched) {
+      const [kind, ...rest] = t.split("|");
+      const id = rest.join("|");
+      if (kind === "compose") { if (S.compose[id]) data.compose[id] = S.compose[id]; else delete data.compose[id]; }
+      if (kind === "edit") { if (S.edits[id]) data.edits[id] = S.edits[id]; else delete data.edits[id]; }
+      if (kind === "pop") data.popDraft = S.popDraft;
+    }
+    touched.clear();
+    const live = new Set([...S.st.threads, ...S.st.drafts, ...S.st.asks].map(x => x.id));
+    for (const id of Object.keys(data.compose)) if (!live.has(id.split(":")[1])) delete data.compose[id];
+    try {
+      if (!Object.keys(data.compose).length && !data.popDraft && !Object.keys(data.edits).length) localStorage.removeItem(k);
+      else localStorage.setItem(k, JSON.stringify(data));
+    } catch { /* storage may be blocked; the work stays in this page */ }
+  };
+  if (now) write(); else workTimer = setTimeout(write, 300);
+}
+
+function restoreWork() {
+  const k = workKey();
+  if (!k) return;
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(k) || "null"); } catch { data = null; }
+  if (!data) return;
+  Object.assign(S.compose, data.compose || {});
+  S.popDraft = data.popDraft || null;
+  S.edits = data.edits || {};
+  const left = [];
+  if (S.popDraft) left.push(`an unsent ${S.popDraft.act === "ask" ? "question" : "comment"} on “${(S.popDraft.quote || "").slice(0, 40)}”`);
+  const edits = Object.values(S.edits);
+  if (edits.length) left.push(`${edits.length === 1 ? "an unsaved edit" : `${edits.length} unsaved edits`} (${edits.map(x => `${x.file} line ${x.first}`).join(", ")})`);
+  if (left.length) {
+    setTimeout(() => notice(`Kept from before: ${left.join(" and ")}. Select the passage again to finish a comment; open the passage with ✎ to restore an edit.`, 0,
+      { label: "Discard them", run: () => { const slots = Object.keys(S.edits); S.popDraft = null; S.edits = {};
+        saveWork(true, "pop|", ...slots.map(x => `edit|${x}`)); } }), 0);
+  }
+}
+
 function fail(e) {
   notice(e.stale ? "The review changed while you were working; it has refreshed. Please try again." : e.message, 10000);
   if (e.stale) load(true);
@@ -84,7 +142,11 @@ async function load(force = false) {
   if (!force && st.key === S.key) return;
   if (S.editing) { notice("The manuscript changed elsewhere; the page will refresh when you finish editing."); return; }
   const keep = scrollAnchor();
+  const round = r => (r && r.round ? r.round.id : null);
+  const fresh = !S.st || round(S.st) !== round(st);
+  if (fresh && S.st) { saveWork(true); S.compose = {}; S.popDraft = null; S.edits = {}; touched.clear(); }
   S.st = st; S.key = st.key;
+  if (fresh) restoreWork();
   draw();
   restoreScroll(keep);
 }
@@ -124,7 +186,7 @@ function draw() {
   drawCounts();
   if (st.mode === "read") notice("Reading only. Start a review with `scrivmark start`, or open one with `scrivmark open <round>`.");
   else if (st.warnings.length) notice("pandoc: " + st.warnings.join(" "), 10000);
-  requestAnimationFrame(buildMargin);
+  requestAnimationFrame(() => { buildMargin(); if (Q.open) { drawQueue(); queueStatus(); } });
 }
 
 function drawCounts() {
@@ -276,6 +338,7 @@ function highlight(t, kind = "") {
 
 function buildMargin() {
   const st = S.st;
+  saveWork();
   const active = document.activeElement;
   const owned = active && active.matches && active.matches("textarea[data-key]") && margin.contains(active)
     ? { key: active.dataset.key, a: active.selectionStart, z: active.selectionEnd, dir: active.selectionDirection, top: active.scrollTop }
@@ -404,7 +467,7 @@ function askComment(card, a, restoring = false) {
     if (!ta.value.trim()) return;
     try {
       await api("/api/ask/update", { ask: a.id, comment: ta.value, rev: S.st.rev });
-      delete S.compose[key];
+      delete S.compose[key]; touched.add(`compose|${key}`);
     } catch (e) { fail(e); }
   };
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") closeComposer(key); });
@@ -435,12 +498,13 @@ async function dismissAsk(id) {
 function composer(key, field, placeholder) {
   const ta = el("textarea", { placeholder, "data-key": `${key}:${field}` });
   ta.value = S.compose[key][field] ?? "";
-  ta.addEventListener("input", () => { if (S.compose[key]) S.compose[key][field] = ta.value; });
+  touched.add(`compose|${key}`);
+  ta.addEventListener("input", () => { if (S.compose[key]) { S.compose[key][field] = ta.value; saveWork(false, `compose|${key}`); } });
   return ta;
 }
 
 function closeComposer(key) {
-  delete S.compose[key];
+  delete S.compose[key]; touched.add(`compose|${key}`);
   buildMargin();
 }
 
@@ -451,7 +515,7 @@ function replyBox(card, t, restoring = false) {
   const ta = composer(key, "text", "Reply…");
   const send = async () => {
     if (!ta.value.trim()) return;
-    try { await api("/api/reply", { thread: t.id, body: ta.value, rev: S.st.rev }); delete S.compose[key]; } catch (e) { fail(e); }
+    try { await api("/api/reply", { thread: t.id, body: ta.value, rev: S.st.rev }); delete S.compose[key]; touched.add(`compose|${key}`); } catch (e) { fail(e); }
   };
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") closeComposer(key); });
   card.append(ta, el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, "Send"),
@@ -470,7 +534,7 @@ function editMessage(card, t, m, restoring = false) {
     if (!ta.value.trim()) { notice("A comment needs some text.", 6000); return; }
     try {
       await api("/api/message", { thread: t.id, message: m.id, body: ta.value, rev: S.st.rev });
-      delete S.compose[key];
+      delete S.compose[key]; touched.add(`compose|${key}`);
     } catch (e) { fail(e); }
   };
   ta.addEventListener("click", e => e.stopPropagation());
@@ -491,7 +555,7 @@ function editDraft(card, d, restoring = false) {
   const wording = d.wording !== null ? composer(key, "wording", "Wording to apply") : null;
   const keep = async () => {
     await triage(d.id, "keep", body.value, wording ? wording.value : undefined, shown);
-    delete S.compose[key];
+    delete S.compose[key]; touched.add(`compose|${key}`);
    
   };
   card.append(el("div", { class: "tag" }, "Comment"), body,
@@ -568,7 +632,11 @@ function setActive(id, scroll = true) {
   $$(".card", margin).forEach(c => c.classList.toggle("active", c.dataset.t === id));
   $$("mark.scrv-hl", doc).forEach(m => m.classList.toggle("active", m.dataset.t === id));
   const it = [...S.st.threads, ...S.st.drafts, ...S.st.asks].find(x => x.id === id);
+  const card = $(`.card[data-t="${CSS.escape(id)}"]`, margin);
   if (scroll && it && it._mark) it._mark.scrollIntoView({ block: "center", behavior: "smooth" });
+  else if (scroll && card) card.scrollIntoView({ block: "center", behavior: "smooth" });
+  const b = it && it._mark && it._mark.closest(".scrv-b");
+  if (b && b.dataset.lines) tell("go", b);
 }
 
 // ------------------------------------------------------------------ changes
@@ -685,21 +753,40 @@ tool.addEventListener("click", e => {
   const s = S.sel;
   tool.hidden = true;
   const ta = el("textarea", { placeholder: act === "comment" ? "Your comment…" : "What should your agent look at here?" });
+  const same = S.popDraft && S.popDraft.act === act && S.popDraft.quote === s.text;
+  const kept = same ? S.popDraft.text : "";
+  const other = S.popDraft && !same ? S.popDraft : null;
+  ta.value = kept;
+  const remember = () => { S.popDraft = ta.value.trim() ? { act, text: ta.value, quote: s.text } : null; saveWork(false, "pop|"); };
+  ta.addEventListener("input", remember);
   const send = async () => {
     if (!ta.value.trim()) return;
     try {
       const where = { file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key };
       if (act === "comment") await api("/api/comment", { ...where, body: ta.value, rev: S.st.rev });
       else { await api("/api/ask", { ...where, question: ta.value }); notice("Your question is in the margin. When you're ready, tell your agent: “check my asks”.", 7000); }
+      S.popDraft = null;
+      saveWork(true, "pop|");
       closePop();
-    } catch (err) { fail(err); }
+    } catch (err) {
+      if (err.stale) {
+        remember();
+        closePop();
+        notice("The page changed while you wrote that, so the selection no longer matches. Your text is kept: select the passage again and press "
+          + (act === "comment" ? "Comment." : "Ask agent."), 12000);
+        load(true);
+      } else fail(err);
+    }
   };
   ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) send(); if (ev.key === "Escape") closePop(); });
   pop.replaceChildren(
     el("div", { class: "muted" }, act === "comment" ? "Comment on the selection" : "Ask your agent about the selection"),
     ta, act === "ask" ? el("div", { class: "muted small" }, "Asks and their answers are kept in the review record when the round is handed on.") : null,
     el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, act === "comment" ? "Comment" : "Queue question"),
-      el("button", { onclick: closePop }, "Cancel")));
+      el("button", { onclick: () => { S.popDraft = null; saveWork(true, "pop|"); closePop(); } }, "Cancel")),
+    kept ? el("div", { class: "muted small" }, "Your earlier text, kept from before.") : null,
+    other ? el("div", { class: "muted small" }, `You also have unsent text about “${(other.quote || "").slice(0, 40)}”. `,
+      el("button", { onclick: () => { ta.value = other.text; remember(); ta.focus(); } }, "Use it here")) : null);
   place(pop, s.rect);
   ta.focus();
 });
@@ -719,9 +806,19 @@ async function startEdit(block) {
   }
   const kind = /\.(tex|ltx)$/.test(block.dataset.file) ? "LaTeX" : "Markdown";
   const ta = el("textarea", { spellcheck: "true", "aria-label": `${kind} source` });
-  ta.value = src.text;
+  const slot = `${src.file}:${src.first}`, earlier = S.edits[slot];
+  ta.value = earlier && earlier.file_rev === src.file_rev && earlier.last === src.last ? earlier.text : src.text;
+  if (earlier && ta.value !== earlier.text) {
+    notice(`You had an unsaved edit here, but ${src.file} has changed since, so it is not put back.`, 0,
+      { label: "Copy my earlier text", run: () => navigator.clipboard?.writeText(earlier.text) });
+  }
+  ta.addEventListener("input", () => {
+    S.edits[slot] = { file: src.file, first: src.first, last: src.last, file_rev: src.file_rev, text: ta.value };
+    saveWork(false, `edit|${slot}`);
+  });
   const box = el("div", { class: "editor" },
-    el("div", { class: "hint" }, `${kind} source · ${src.file}, lines ${src.first}–${src.last} · Ctrl/⌘-Enter saves, Esc cancels`),
+    el("div", { class: "hint" }, `${kind} source · ${src.file}, lines ${src.first}–${src.last} · Ctrl/⌘-Enter saves, Esc cancels`
+      + (earlier && ta.value === earlier.text && earlier.text !== src.text ? " · your unsaved edit, restored" : "")),
     ta,
     el("div", { class: "acts" }, el("button", { class: "primary", onclick: save }, "Save"), el("button", { onclick: cancel }, "Cancel")));
   block.replaceWith(box);
@@ -738,10 +835,12 @@ async function startEdit(block) {
     btn.textContent = "Saving…";
     try {
       await api("/api/source", { file: src.file, first: src.first, last: src.last, text: ta.value, file_rev: src.file_rev });
+      delete S.edits[slot];
+      saveWork(true, `edit|${slot}`);
       done();
     } catch (e) { btn.disabled = false; btn.textContent = "Save"; notice(e.message, 12000); }
   }
-  function cancel() { box.replaceWith(block); done(); }
+  function cancel() { delete S.edits[slot]; saveWork(true, `edit|${slot}`); box.replaceWith(block); done(); }
   function done() { if (S.editing && S.editing.token === token) S.editing = null; load(true); }
 }
 
@@ -774,11 +873,168 @@ function step(d) {
 $("#next").onclick = () => step(1);
 $("#prev").onclick = () => step(-1);
 $("#help").onclick = () => $("#helpbox").showModal();
+// ------------------------------------------------------------------ items list
+
+const KINDS = { change: "Changes", comment: "Comments", draft: "Drafts", ask: "Asks", lost: "Lost" };
+const Q = { open: false, kind: "all" };
+try { Q.done = localStorage.getItem("scrivmark-qdone") === "on"; } catch { Q.done = false; }
+
+function sectionOf(node, heads) {
+  let h = null;
+  for (const x of heads) {
+    if (x === node || x.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) h = x;
+    else break;
+  }
+  return h ? h.textContent.replace(/\s+/g, " ").trim() : "";
+}
+
+function short(s, n = 90) {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n - 1) + "…" : t;
+}
+
+function items() {
+  const st = S.st, out = [];
+  const where = it => it.line ? `${it.anchor.file}:${it.line[0]}` : it.anchor.file;
+  for (const t of st.threads) {
+    const lost = !t.line;
+    out.push({ kind: lost && t.status === "open" ? "lost" : "comment", id: t.id, done: t.status === "resolved",
+      label: short(t.messages[0].body), quote: short(t.current ?? t.anchor.exact, 60), at: where(t),
+      node: t._mark, go: () => setActive(t.id), state: lost ? "lost its place" : t.status });
+  }
+  for (const d of st.drafts) {
+    out.push({ kind: d.line ? "draft" : "lost", id: d.id, done: false,
+      label: d.body ? short(d.body) : `→ ${short(d.wording, 70)}`, quote: short(d.current ?? d.anchor.exact, 60),
+      at: where(d), node: d._mark, go: () => setActive(d.id), state: d.by ? `from ${d.by}` : "draft" });
+  }
+  for (const a of st.asks) {
+    out.push({ kind: "ask", id: a.id, done: !!a.done, label: short(a.question), quote: short(a.current ?? a.anchor.exact, 60),
+      at: where(a), node: a._mark, go: () => setActive(a.id), state: a.answer ? "answered" : "waiting" });
+  }
+  if (st.mode === "author" || st.mode === "closed") {
+    for (const c of st.changes) {
+      const node = $(`[data-c~="${c.id}"]`, doc) || $(`.row[data-q="${c.id}"]`);
+      out.push({ kind: "change", id: c.id, done: c.state !== "pending", at: c.file,
+        label: c.type === "file" ? `${c.file}: ${c.reviewer}` : `${short(c.base, 40) || "(nothing)"} → ${short(c.reviewer, 40) || "(removed)"}`,
+        node, go: () => node && (node.scrollIntoView({ block: "center", behavior: "smooth" }), node.focus?.({ preventScroll: true })),
+        state: c.state });
+    }
+  } else if (st.mode === "reviewer") {
+    const marks = $$(".scrv-del, .scrv-ins, .scrv-old, .scrv-ins-block", doc);
+    for (let i = 0; i < marks.length; i++) {
+      const m = marks[i], next = marks[i + 1];
+      const pair = m.matches(".scrv-del") && next && next.matches(".scrv-ins") && m.nextElementSibling === next;
+      const blk = m.closest(".scrv-b") || m;
+      out.push({ kind: "change", id: `e${i}`, done: false, at: `${blk.dataset.file || ""}${blk.dataset.lines ? ":" + blk.dataset.lines.split("-")[0] : ""}`,
+        label: pair ? `${short(m.textContent, 40)} → ${short(next.textContent, 40)}`
+          : m.matches(".scrv-del, .scrv-old") ? `removed: ${short(m.textContent, 70)}` : `added: ${short(m.textContent, 70)}`,
+        node: m, go: () => m.scrollIntoView({ block: "center", behavior: "smooth" }), state: "your edit" });
+      if (pair) i++;
+    }
+  }
+  const heads = $$("h1, h2, h3", doc);
+  for (const it of out) {
+    it.section = it.node && doc.contains(it.node) ? sectionOf(it.node, heads) : "";
+    it.pos = it.node && doc.contains(it.node) ? it.node : null;
+  }
+  return out.sort((a, b) => {
+    if (!a.pos || !b.pos) return (a.pos ? 0 : 1) - (b.pos ? 0 : 1);
+    return a.pos.compareDocumentPosition(b.pos) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
+
+function drawQueue() {
+  if (!Q.open || !S.st) return;
+  const all = items(), shown = all.filter(it => Q.done || !it.done);
+  const count = k => shown.filter(it => k === "all" || it.kind === k).length;
+  $("#qfilters").replaceChildren(...["all", ...Object.keys(KINDS)].filter(k => k === "all" || all.some(it => it.kind === k)).map(k =>
+    el("button", { class: `chip${Q.kind === k ? " on" : ""}`, "aria-pressed": String(Q.kind === k),
+      onclick: () => { Q.kind = k; drawQueue(); } }, `${k === "all" ? "All" : KINDS[k]} ${count(k)}`)));
+  const list = shown.filter(it => Q.kind === "all" || it.kind === Q.kind);
+  let section = null;
+  const rows = [];
+  for (const it of list) {
+    if (it.section !== section) {
+      section = it.section;
+      rows.push(el("li", { class: "qsec" }, section || (it.pos ? "Before the first heading" : "Outside the running text")));
+    }
+    rows.push(el("li", { class: `qitem ${it.kind}${it.done ? " done" : ""}` },
+      el("button", { onclick: () => it.go(), title: it.at },
+        el("span", { class: "qkind" }, KINDS[it.kind].replace(/s$/, "")),
+        el("span", { class: "qlabel" }, it.label || it.quote),
+        it.quote && it.label !== it.quote ? el("span", { class: "qquote" }, `“${it.quote}”`) : null,
+        el("span", { class: "qmeta" }, `${it.state} · ${it.at}`))));
+  }
+  $("#qlist").replaceChildren(...(rows.length ? rows : [el("li", { class: "muted small" }, "Nothing here.")]));
+}
+
+function toggleQueue(open = !Q.open) {
+  Q.open = open;
+  $("#queue").hidden = !open;
+  $("#queuebtn").setAttribute("aria-expanded", String(open));
+  document.body.classList.toggle("queue-open", open);
+  if (open) { drawQueue(); queueStatus(); }
+}
+
+async function queueStatus() {
+  const box = $("#qstatus");
+  if (!S.st || !S.st.round || S.st.mode === "closed" || S.st.mode === "read") { box.hidden = true; return; }
+  try {
+    const p = await api("/api/preflight", undefined, "Checking the round…");
+    const what = p.transition === "return" ? "return" : "close";
+    box.hidden = false;
+    box.replaceChildren(p.ready
+      ? el("span", {}, `✓ Ready to ${what}.`)
+      : el("span", {}, `Not ready to ${what}: `, ...(p.blockers || []).map((b, i) => el("span", {}, (i ? "; " : "") + (b.text || b)))));
+  } catch { box.hidden = true; }
+}
+
+$("#queuebtn").onclick = () => toggleQueue();
+$("#qclose").onclick = () => toggleQueue(false);
+$("#qdone").checked = Q.done;
+$("#qdone").onchange = e => {
+  Q.done = e.target.checked;
+  try { localStorage.setItem("scrivmark-qdone", Q.done ? "on" : "off"); } catch { /* ignore */ }
+  drawQueue();
+};
+
+// ------------------------------------------------------------------ reading tab
+
+const link = new BroadcastChannel("scrivmark-follow");
+let followTimer = null;
+
+$("#readtab").addEventListener("click", () => window.open("/read", "scrivmark-read"));
+
+function tell(kind, block) {
+  const [line] = block.dataset.lines.split("-").map(Number);
+  link.postMessage({ from: "review", kind, file: block.dataset.file, line, top: block.getBoundingClientRect().top });
+}
+
+addEventListener("scroll", () => {
+  clearTimeout(followTimer);
+  followTimer = setTimeout(() => {
+    const b = $$(".scrv-b", doc).find(x => x.getBoundingClientRect().bottom > 60);
+    if (b && b.dataset.lines) tell("scroll", b);
+  }, 120);
+}, { passive: true });
+
+link.onmessage = e => {
+  const m = e.data;
+  if (!m || m.from !== "read") return;
+  const b = findBlock(m.file, m.line);
+  if (!b) return;
+  b.scrollIntoView({ block: "center", behavior: "smooth" });
+  b.classList.add("followed");
+  setTimeout(() => b.classList.remove("followed"), 1200);
+};
+
 document.addEventListener("keydown", e => {
   if (e.target.closest("textarea, input") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === "j") step(1);
   if (e.key === "k") step(-1);
   if (e.key === "?") $("#helpbox").showModal();
+  if (e.key === "q") toggleQueue();
+  if (e.key === "Escape" && Q.open) toggleQueue(false);
 });
 addEventListener("resize", () => S.st && layoutMargin());
 

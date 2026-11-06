@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scrivmark · reading</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="reading">
+<header id="bar">
+  <div class="bar-left">
+    <span class="brand">scrivmark</span>
+    <span class="badge read">Reading view</span>
+    <span id="roundid" class="muted"></span>
+    <span id="conn" class="badge offline" hidden title="The viewer has lost touch with scrivmark serve">offline</span>
+  </div>
+  <div class="bar-right">
+    <label class="muted small" title="Keep this tab at the passage you are looking at in the review tab">
+      <input type="checkbox" id="follow" checked> Follow the review tab
+    </label>
+  </div>
+</header>
+<div id="busy" hidden role="status" aria-live="polite"><div class="busybar"></div><span class="busylabel"></span></div>
+<main id="layout">
+  <article id="doc"><p class="loading">Rendering the manuscript…</p></article>
+</main>
+<script src="/static/read.js"></script>
+</body>
+</html>

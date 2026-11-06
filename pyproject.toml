@@ -1,6 +1,6 @@
 [project]
 name = "scrivmark"
-version = "0.4.0"
+version = "0.5.0"
 description = "Manuscript review on Markdown and Quarto sources: tracked changes as git edits, comment threads beside the text, a rendered viewer and an agent CLI"
 readme = "README.md"
 license = "MIT"

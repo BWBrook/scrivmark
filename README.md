@@ -109,8 +109,19 @@ scrivmark open <round>  # author: work through the review in the same viewer
 scrivmark close         # merge it, keeping the record in reviews/
 ```
 
+`return --dry-run` and `close --dry-run` say what each would do and what
+still stands in the way, without changing anything. `scrivmark export`
+writes a readable summary of a round (changes, comments, decisions) as
+Markdown or, with `--html`, a web page to keep or share.
 `scrivmark doctor` checks your setup, and `scrivmark --help` lists every
 command. Authors can ask for a review with `scrivmark request`.
+
+In the viewer, **Items** (or <kbd>q</kbd>) lists everything in the round by
+section, with filters, whether it is ready to return or close, and a summary
+to download. **Reading view** opens the manuscript as it now reads, every
+edit in and nothing marked, in a second tab that follows your place in the
+first; click a passage there to jump back to it. Unsent comments, replies
+and source edits are kept in the browser if the page reloads.
 
 The viewer listens on port 8765 (set another with `[viewer] port = 8800` in
 `scrivmark.toml`, or `--port`) and keeps the same address across restarts. A

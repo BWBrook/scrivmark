@@ -18,6 +18,8 @@
     <span id="counts" class="muted" aria-live="polite"></span>
     <button id="prev" title="Previous item (k)">↑</button>
     <button id="next" title="Next change or comment (j)">↓</button>
+    <button id="queuebtn" title="Everything in this round, filtered (q)" aria-expanded="false" aria-controls="queue">Items</button>
+    <button id="readtab" title="Open the manuscript as it now reads, without tracked changes, in another tab that follows this one">Reading view ↗</button>
     <button id="help" title="How this works">?</button>
   </div>
 </header>
@@ -30,6 +32,17 @@
   <article id="doc"><p class="loading">Rendering the manuscript… A long one can take ten seconds or so the first time.</p></article>
   <aside id="margin"></aside>
 </main>
+<aside id="queue" hidden aria-label="Items in this round">
+  <div class="qhead">
+    <b>Items</b>
+    <label class="muted small"><input type="checkbox" id="qdone"> Show done</label>
+    <a id="qsummary" class="button" href="/api/summary" download title="Download a summary of this round (changes, comments, decisions) as a web page to keep or share">Summary</a>
+    <button id="qclose" title="Close (q or Esc)">Close</button>
+  </div>
+  <div id="qstatus" class="muted small" hidden></div>
+  <div id="qfilters" role="group" aria-label="Show"></div>
+  <ol id="qlist"></ol>
+</aside>
 <div id="tool" hidden>
   <button data-act="comment">Comment</button>
   <button data-act="ask" title="Queue a question for your agent">Ask agent</button>
@@ -53,7 +66,9 @@
     <li><b>Edit:</b> hover over a paragraph and press ✎ to edit its Markdown in place.</li>
     <li><b>Ask your agent:</b> select text and tell Claude or Codex “look at my selection”, or press <i>Ask agent</i>. Asks stay in the margin, in blue, only for you; tell your agent “check my asks” whenever you like, and its answers appear on the cards. <i>Comment from this</i> turns an answer into a comment for the author.</li>
     <li><b>Authors</b> click a change (or Tab to it and press Enter) to accept or reject it. A decision can be undone from the message that follows, or with <code>scrivmark undo</code>.</li>
-    <li><b>Keys:</b> <kbd>j</kbd>/<kbd>k</kbd> move through everything still unresolved, including changes outside the running text.</li>
+    <li><b>Reading view</b> opens the manuscript as it now reads, every edit in and nothing marked, in its own tab. It follows your place here; click a passage there to come back to it here.</li>
+    <li><b>Items</b> lists every change, comment, draft and ask, by section, with filters; click one to go to it.</li>
+    <li><b>Keys:</b> <kbd>j</kbd>/<kbd>k</kbd> move through everything still unresolved, including changes outside the running text; <kbd>q</kbd> opens the list of items.</li>
   </ul>
   <form method="dialog"><button>Got it</button></form>
 </dialog>

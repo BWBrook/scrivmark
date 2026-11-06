@@ -17,7 +17,9 @@ comments re-attached from the viewer; the full agent CLI, including batches,
 dry runs, draft revision and attribution of agent-drafted work; the viewer
 (pandoc rendering, redline, margin, selection, flip-to-source editing, live
 updates, keyboard decisions, keep-all, figure zoom, editing your own
-comments); LaTeX sources; detection of makedoc profiles in `init`; the
+comments, a reading view in a second tab, a filterable items drawer with the
+round's readiness, recovery of unsent work); transition previews
+(`return --dry-run`, `close --dry-run`) and summary export; LaTeX sources; detection of makedoc profiles in `init`; the
 tutorial and the agent guide; tagged releases with an update check in
 `doctor`.
 
@@ -358,6 +360,19 @@ desktop app's browser pane.
   of the base snapshot, so they cannot change the bibliography or numbering.
 - During `returned`, the redline shows the frozen catalogue projected onto the
   current text, with each unit's status.
+
+### Reading view and items
+
+The reading view is a second tab, not a pane: on a laptop the review tab
+already holds the manuscript and the margin. It shows the current text with
+nothing marked (`/api/clean`, cached on the sources alone) and follows the
+review tab through a `BroadcastChannel`: the top block in view, matched by
+file and line, and a click on a passage there sends the review tab to it.
+The items drawer floats over the margin and is built from the same state as
+the margin, ordered by position in the page and grouped by the nearest
+heading. Its readiness line comes from `rounds.preflight`, the same function
+behind `--dry-run`. Unsent work is kept in `localStorage`, per round, and an
+unsaved source edit is restored only against the file revision it was made on.
 
 ### Margin and interactions
 

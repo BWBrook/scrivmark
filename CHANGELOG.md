@@ -10,6 +10,27 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.5.0 (6 November 2026)
+
+- **Reading view.** A button in the viewer opens the manuscript as it now
+  reads, every edit in and nothing marked, in a second tab. It follows your
+  place in the review tab, and a click on a passage there takes the review tab
+  to it.
+- **Items.** A drawer (button or <kbd>q</kbd>) lists every change, comment,
+  draft and ask by section, with filters and a "show done" switch, says
+  whether the round is ready to return or close and what is in the way, and
+  offers a summary to download.
+- **Nothing you were writing is lost.** Unsent replies and comment edits, the
+  text of a comment on a selection, and unsaved source edits are kept in the
+  browser and come back after a reload. A comment whose selection went stale
+  keeps its text for the next try. An unsaved edit is put back only if the
+  file has not changed since; otherwise you can copy it.
+- `scrivmark return --dry-run` and `scrivmark close --dry-run` (with
+  `--json`) say what the step would do and what blocks it, changing nothing.
+- `scrivmark export [ROUND] [--html] [-o FILE]` writes a readable summary of a
+  round: statement, changes and decisions, comment threads, asks, and what is
+  outstanding.
+
 ## 0.4.0 (6 November 2026)
 
 Fixes from an external audit (GPT-6 Pro, 5 November 2026); the record and its

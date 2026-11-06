@@ -246,3 +246,35 @@ span.scrv-note::after { content: "⟩"; }
 
 .card .msgedit { float: right; margin-left: 6px; padding: 0 7px; font-size: 11px; line-height: 18px; opacity: .55; }
 .card:hover .msgedit, .card .msgedit:focus { opacity: 1; }
+
+body.reading #layout { grid-template-columns: minmax(0, 1fr); max-width: 820px; }
+body.reading .scrv-note { display: none; }
+body.reading #doc .scrv-b[data-file] { cursor: pointer; }
+.scrv-b.followed { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; transition: outline-color .6s; }
+
+#queue { position: fixed; top: 52px; right: 12px; bottom: 12px; width: min(380px, calc(100vw - 24px)); z-index: 40;
+  display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / .18); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+#queue[hidden] { display: none; }
+.qhead { display: flex; align-items: center; gap: 10px; padding: 10px 12px 6px; }
+.qhead #qclose { margin-left: auto; }
+#qstatus { padding: 0 12px 6px; }
+#qfilters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; border-bottom: 1px solid var(--rule); }
+.chip { padding: 2px 9px; border-radius: 12px; font-size: 12px; }
+.chip.on { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+#qlist { list-style: none; margin: 0; padding: 4px 6px 10px; overflow: auto; flex: 1; }
+.qsec { margin: 10px 6px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.qitem button { display: block; width: 100%; text-align: left; border: 0; border-radius: 6px; padding: 6px 8px; background: none; }
+.qitem button:hover, .qitem button:focus-visible { background: var(--rule); }
+.qitem.done { opacity: .6; }
+.qkind { display: inline-block; min-width: 7.2em; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.qitem.lost .qkind { color: #b45309; }
+.qlabel { color: var(--ink, inherit); }
+.qquote, .qmeta { display: block; font-size: 12px; color: var(--muted); margin-left: 6.6em; }
+@media (min-width: 1200px) { body.queue-open #layout { margin-right: 400px; } }
+
+.qhead #qsummary { margin-left: auto; }
+.qhead #qsummary + #qclose { margin-left: 0; }
+a.button { display: inline-block; padding: 3px 10px; border: 1px solid var(--rule); border-radius: 6px; color: inherit;
+  text-decoration: none; font: inherit; font-size: 13px; }
+a.button:hover { border-color: var(--accent); }

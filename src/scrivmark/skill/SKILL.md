@@ -151,6 +151,9 @@ author: accept, reject, reply, resolve, edit.
   `US$5,000`). The preamble is not shown in the viewer; anything changed there
   appears only in `scrivmark changes`.
 - `scrivmark return` hands the round back. It refuses while drafts remain.
+  Run `scrivmark return --dry-run --json` first and tell the reviewer what it
+  reports (drafts left, untracked files, comments that lost their place, how
+  many changes will be recorded, where it will be pushed); it changes nothing.
 
 ## Helping an author
 
@@ -164,7 +167,12 @@ author: accept, reject, reply, resolve, edit.
 - Edit the source freely when asked. Changes the author edits become
   `superseded` and need no decision.
 - `scrivmark close` merges the round once every change is decided and every
-  thread resolved.
+  thread resolved. `scrivmark close --dry-run --json` lists what is still
+  pending or open, and whether the author branch has moved, without changing
+  anything.
+- `scrivmark export [ROUND] [--html] [-o FILE]` writes a readable summary of a
+  round, for archiving or for someone without scrivmark. The JSON record in
+  `reviews/` stays the authoritative one.
 
 ## Conflicts and refusals
 

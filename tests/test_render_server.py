@@ -255,3 +255,22 @@ def test_viewer_marks_and_edits_your_own_comments(repo):
     st = client.get("/api/state").json()
     assert st["threads"][0]["messages"][0]["body"] == "Hm, why?" and st["threads"][0]["messages"][0]["edited_at"]
     assert client.post("/api/message", json={"thread": t["id"], "message": mid, "body": " "}).status_code == 400
+
+
+def test_reading_view_and_preflight_endpoints(repo):
+    rounds.start(repo)
+    edit(repo, "proves that", "tests whether")
+    viewer = Viewer(repo)
+    client = TestClient(build_app(viewer), base_url="http://127.0.0.1")
+    assert client.get("/api/clean").status_code == 403
+    client.cookies.set(viewer.cookie, viewer.token)
+    page = client.get("/read")
+    assert page.status_code == 200 and "/static/read.js" in page.text
+    assert client.get("/static/read.js").status_code == 200
+    clean = client.get("/api/clean").json()
+    assert "tests whether" in clean["html"] and "proves that" not in clean["html"] and "scrv-del" not in clean["html"]
+    pre = client.get("/api/preflight").json()
+    assert pre["transition"] == "return" and pre["ready"] is True
+    summary = client.get("/api/summary")
+    assert summary.status_code == 200 and "attachment" in summary.headers["content-disposition"]
+    assert "<script" not in summary.text and "Reviewed by" in summary.text

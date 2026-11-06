@@ -23,7 +23,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Respon
 from starlette.routing import Route
 from watchfiles import awatch
 
-from . import config, figures, gitutil, latex, record, render, review
+from . import config, figures, gitutil, latex, record, render, review, rounds
 from .blocks import guarded_segments, line_of
 from .errors import Conflict, ScrivError, StaleRevision
 from .selection import PLACEHOLDER, _plain, map_selection
@@ -66,6 +66,7 @@ class Viewer:
         saved = read_json(viewer_file(root), {})
         self.token = saved.get("token") or secrets.token_urlsafe(18)
         self.cache: tuple[str, dict] | None = None
+        self.clean_cache: tuple[str, dict] | None = None
         self.lock = threading.Lock()
         self.listeners: set[asyncio.Queue] = set()
 
@@ -93,6 +94,24 @@ class Viewer:
         requests after a change renders once and the rest share the result."""
         with self.lock:
             return self._state()
+
+    def clean(self) -> dict:
+        """The manuscript as it now reads, every edit in and nothing marked:
+        what the reading tab shows. It depends only on the sources."""
+        with self.lock:
+            ms = config.load(self.root)
+            paths = [config.CONFIG, *ms.files, *ms.bibliography, *([ms.csl] if ms.csl else [])]
+            key = f"clean:{gitutil.current_branch(self.root)}:{revision(self.root, paths)}"
+            if self.clean_cache and self.clean_cache[0] == key:
+                return self.clean_cache[1]
+            try:
+                html, _ = render.render(self.root, ms)
+            except RuntimeError as e:
+                html = f"<pre class='scrv-error'>{_esc(str(e))}</pre>"
+            rv = self.current()
+            data = {"key": key, "html": html, "title": ms.title, "round": rv.id if rv else None}
+            self.clean_cache = (key, data)
+            return data
 
     def _state(self) -> dict:
         ms = config.load(self.root)
@@ -256,17 +275,23 @@ def build_app(viewer: Viewer) -> Starlette:
         return inner
 
     async def index(request: Request):
+        return page(request, "index.html")
+
+    async def reading(request: Request):
+        return page(request, "read.html")
+
+    def page(request: Request, name: str):
         if not local_host(request):
             return HTMLResponse("<p>scrivmark answers only on 127.0.0.1 or localhost.</p>", status_code=403)
         if request.query_params.get("t") != viewer.token and not authorised(request) and not local_navigation(request):
             return HTMLResponse("<p>Open the address that <code>scrivmark url</code> prints.</p>", status_code=403)
-        resp = HTMLResponse((STATIC / "index.html").read_text(), headers={"Content-Security-Policy": CSP})
+        resp = HTMLResponse((STATIC / name).read_text(), headers={"Content-Security-Policy": CSP})
         resp.set_cookie(viewer.cookie, viewer.token, httponly=True, samesite="strict")
         return resp
 
     async def static(request: Request):
         name = request.path_params["name"]
-        if name not in ("app.js", "app.css"):
+        if name not in ("app.js", "app.css", "read.js"):
             return Response(status_code=404)
         return Response((STATIC / name).read_text(), media_type=mimetypes.guess_type(name)[0])
 
@@ -300,6 +325,21 @@ def build_app(viewer: Viewer) -> Starlette:
         if out is None:
             return Response(figures.placeholder(reason), media_type="image/svg+xml", headers=headers)
         return FileResponse(out, media_type="image/svg+xml", headers=headers)
+
+    def summary(request: Request, b: dict):
+        from . import export
+
+        rv = viewer.need()
+        return HTMLResponse(export.html(rv), headers={
+            "Content-Disposition": f'attachment; filename="scrivmark-{rv.id}.html"',
+            "Content-Security-Policy": "sandbox; script-src 'none'"})
+
+    def preflight(request: Request, b: dict):
+        viewer.need()
+        return JSONResponse(rounds.preflight(viewer.root))
+
+    def clean(request: Request, b: dict):
+        return JSONResponse(viewer.clean())
 
     def state(request: Request, b: dict):
         return JSONResponse(viewer.state())
@@ -423,11 +463,15 @@ def build_app(viewer: Viewer) -> Starlette:
 
     routes = [
         Route("/", index),
+        Route("/read", reading),
         Route("/static/{name}", static),
         Route("/files/{path:path}", repo_file),
         Route("/png/{path:path}", figure_png),
         Route("/scrv-tikz/{name}", tikz_svg),
         Route("/api/state", guard(state)),
+        Route("/api/clean", guard(clean)),
+        Route("/api/preflight", guard(preflight)),
+        Route("/api/summary", guard(summary)),
         Route("/api/events", guard(events)),
         Route("/api/source", guard(source_get)),
         Route("/api/source", guard(source_put, True), methods=["POST"]),

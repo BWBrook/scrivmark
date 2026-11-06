@@ -23,6 +23,9 @@ Json = Annotated[bool, typer.Option("--json", help="Machine-readable output for 
 Expect = Annotated[Optional[str], typer.Option("--expect", help="Refuse if the review has changed since this revision.")]
 
 
+DryRun = Annotated[bool, typer.Option("--dry-run", help="Show what this would do and what blocks it, changing nothing.")]
+
+
 def _show_version(value: bool) -> None:
     if value:
         from . import __version__
@@ -45,6 +48,29 @@ def _emit(data, as_json: bool, human: str | None = None) -> None:
         typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
     elif human is not None:
         typer.echo(human)
+
+
+def _preview(command: str, pf: dict, as_json: bool) -> None:
+    """Print the preflight for `command` and exit 0 if ready, else 1."""
+    if pf["transition"] != command:
+        hint = {"return": "`scrivmark return --dry-run` previews the next step",
+                "close": "`scrivmark close --dry-run` previews the next step",
+                None: "nothing is left to do"}[pf["transition"]]
+        raise ScrivError(f"Round {pf['round']} is {pf['status']}, so `scrivmark {command}` does not apply; {hint}.")
+    lines = [f"Round {pf['round']}: preview of `scrivmark {command}` (nothing is changed)"]
+    lines += [f"  {'✓' if c['ok'] else '✗'} {c['text']}" for c in pf["checks"]]
+    if command == "return":
+        lines.append(f"  Edits in {len(pf['files'])} file(s): {', '.join(pf['files']) or 'none'}; "
+                     f"{pf['changes']} tracked change(s), {pf['threads']} comment thread(s)")
+        lines.append(f"  Statement: {pf['statement']}")
+    else:
+        d = pf["decisions"]
+        lines.append(f"  Decided: {d['accepted']} accepted, {d['rejected']} rejected, {d['superseded']} superseded")
+    lines += [f"  Note: {n}" for n in pf["notes"]]
+    lines.append("Ready. This will:" if pf["ready"] else "Not ready. Once cleared, this will:")
+    lines += [f"  - {w}" for w in pf["will"]]
+    _emit(pf, as_json, "\n".join(lines))
+    raise typer.Exit(0 if pf["ready"] else 1)
 
 
 def _who(rv: review.Review) -> str:
@@ -247,8 +273,10 @@ def request(reviewer: Annotated[str, typer.Option(help="Reviewer's name.")],
 def return_(push: Annotated[bool, typer.Option(help="Push the round to origin if there is one.")] = True,
             statement: Annotated[Optional[str], typer.Option(
                 help="Restate how this review was done (replaces the one set at start).")] = None,
-            as_json: Json = False):
+            dry_run: DryRun = False, as_json: Json = False):
     """Hand the review back to the author (reviewer)."""
+    if dry_run:
+        _preview("return", rounds.preflight(_root(), statement=statement, push=push), as_json)
     info = rounds.return_round(_root(), push, statement)
     msg = f"Returned round {info['round']}: {info['changes']} changes, {info['threads']} comments."
     if info["orphans"]:
@@ -283,13 +311,30 @@ def open_(round_id: Annotated[str, typer.Argument(help="Round id, e.g. 2026-11-0
 @app.command()
 def close(round_id: Annotated[Optional[str], typer.Argument(help="Round to finish closing, if not checked out.")] = None,
           force: Annotated[bool, typer.Option(help="Close even with undecided changes or open comments.")] = False,
-          push: Annotated[bool, typer.Option()] = True, as_json: Json = False):
+          push: Annotated[bool, typer.Option()] = True, dry_run: DryRun = False, as_json: Json = False):
     """Finish the round and merge it into the author branch (author)."""
+    if dry_run:
+        _preview("close", rounds.preflight(_root(), round_id, push=push, force=force), as_json)
     info = rounds.close_round(_root(), force, push, round_id)
     d = info["decisions"]
     _emit(info, as_json, f"Closed round {info['round']} and merged it into {info['merged_into']}: "
           f"{d['accepted']} accepted, {d['rejected']} rejected, {d['superseded']} superseded by your edits.\n"
           f"The review record stays in reviews/{info['round']}.json.")
+
+
+@app.command("export")
+def export_(round_id: Annotated[Optional[str], typer.Argument(help="Round to export, if not checked out.")] = None,
+            html: Annotated[bool, typer.Option("--html", help="Standalone HTML instead of Markdown.")] = False,
+            output: Annotated[Optional[Path], typer.Option("-o", "--output", help="Write to this file, not stdout.")] = None):
+    """Write a readable summary of a round: changes, comments, decisions."""
+    from . import export
+    rv = review.active(_root(), round_id)
+    text = export.html(rv) if html else export.markdown(rv)
+    if output:
+        output.write_text(text)
+        typer.echo(f"Wrote {output}", err=True)
+    else:
+        typer.echo(text, nl=False)
 
 
 @app.command()
