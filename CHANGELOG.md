@@ -10,6 +10,11 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## Unreleased
+
+- The README is rewritten around what scrivmark now does, with new screenshots.
+- Long entries in the Items panel no longer wrap under their type.
+
 ## 0.5.0 (6 November 2026)
 
 - **Reading view.** A button in the viewer opens the manuscript as it now
