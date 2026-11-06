@@ -1,6 +1,6 @@
 "use strict";
 
-const S = { st: null, key: null, editing: null, active: null, cur: -1, selPosted: false, compose: {}, focus: null };
+const S = { st: null, key: null, editing: null, active: null, cur: -1, selPosted: false, compose: {} };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const doc = $("#doc"), margin = $("#margin"), tool = $("#tool"), pop = $("#pop");
@@ -225,21 +225,33 @@ function highlight(t, kind = "") {
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
     acceptNode: n => n.parentElement.closest(HISTORICAL) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
   });
-  let text = "", n;
+  let text = "", n, opaqueAt = null;
   const map = [];
+  const TYPO = { "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-", "\u2014": "-", "\u00a0": " ", "\u2026": "..." };
   while ((n = walker.nextNode())) {
+    const opaque = n.parentElement.closest("math, .citation");
+    if (opaque) {
+      if (opaque !== opaqueAt) { text += "\u0000"; map.push([n, 0]); opaqueAt = opaque; }
+      continue;
+    }
+    opaqueAt = null;
     for (let i = 0; i < n.data.length; i++) {
-      const ch = /\s/.test(n.data[i]) ? " " : n.data[i];
-      if (ch === " " && text.endsWith(" ")) continue;
-      text += ch;
-      map.push([n, i]);
+      const raw = n.data[i];
+      const out = /\s/.test(raw) ? " " : (TYPO[raw] ?? raw);
+      for (const ch of out) {
+        if (ch === " " && text.endsWith(" ")) continue;
+        if (ch === "-" && text.endsWith("-") && raw === n.data[i - 1]) continue;
+        text += ch;
+        map.push([n, i]);
+      }
     }
   }
-  const nth = (needle, k) => { let i = -1; for (let j = 0; j <= k; j++) { i = text.indexOf(needle, i + 1); if (i < 0) return -1; } return i; };
-  let needle = plainQuote(t.current || t.anchor.exact);
-  let at = needle ? nth(needle, t.nth || 0) : -1;
-  if (at < 0 && needle.length > 30) { needle = needle.slice(0, 30); at = nth(needle, t.nth || 0); }
-  if (at < 0) { block.classList.add("block-hl"); t._mark = block; return; }
+  const hl = t.hl;
+  const occurrences = needle => { const at = []; for (let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + 1)) at.push(i); return at; };
+  const found = hl && hl.text ? occurrences(hl.text) : [];
+  const at = found.length && found.length === hl.count ? found[hl.nth] : -1;
+  const needle = hl ? hl.text : "";
+  if (at === undefined || at < 0) { block.classList.add("block-hl"); t._mark = block; return; }
   const byNode = new Map();
   for (let k = at; k < at + needle.length; k++) {
     const [node, off] = map[k];
@@ -264,7 +276,10 @@ function highlight(t, kind = "") {
 
 function buildMargin() {
   const st = S.st;
-  const focusKey = S.focus;
+  const active = document.activeElement;
+  const owned = active && active.matches && active.matches("textarea[data-key]") && margin.contains(active)
+    ? { key: active.dataset.key, a: active.selectionStart, z: active.selectionEnd, dir: active.selectionDirection, top: active.scrollTop }
+    : null;
   margin.replaceChildren();
   const items = [
     ...st.drafts.map(d => ({ ...d, kind: "draft" })),
@@ -281,9 +296,13 @@ function buildMargin() {
     if (S.compose[`${it.kind}:${it.id}`]) reopen[it.kind](c, it, true);
     if (it.kind === "thread") for (const m of it.messages) if (S.compose[`msg:${it.id}:${m.id}`]) editMessage(c, it, m, true);
   }
-  if (focusKey) {
-    const ta = $(`textarea[data-key="${focusKey}"]`, margin);
-    if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  if (owned) {
+    const ta = $(`textarea[data-key="${owned.key}"]`, margin);
+    if (ta) {
+      ta.focus({ preventScroll: true });
+      ta.setSelectionRange(owned.a, owned.z, owned.dir);
+      ta.scrollTop = owned.top;
+    }
   }
   layoutMargin();
 }
@@ -317,7 +336,7 @@ function quoteLine(it) {
 function threadCard(t) {
   const orphan = !t.line;
   const c = el("div", { class: `card ${t.status}${orphan ? " orphan" : ""}`, tabindex: "-1" },
-    orphan ? el("div", { class: "tag" }, "Lost its place: its passage was rewritten past recognition") : null,
+    orphan ? el("div", { class: "tag" }, lostWhy(t)) : null,
     quoteLine(t),
     ...t.messages.map(m => el("div", { class: "msg", "data-m": m.id },
       (t.editable || []).includes(m.id)
@@ -337,20 +356,30 @@ function threadCard(t) {
   return c;
 }
 
+function lostWhy(it) {
+  return it.where && it.where.why === "ambiguous"
+    ? "Lost its place: its passage appeared twice and one copy was removed, so which one this was about can't be told"
+    : "Lost its place: its passage was rewritten past recognition";
+}
+
 function draftCard(d) {
+  const shown = S.st.rev;
   const c = el("div", { class: "card draft", tabindex: "-1" },
     el("div", { class: "tag" }, d.by ? `Draft from ${d.by}` : "Draft from your agent"),
+    d.line ? null : el("div", { class: "tag" }, lostWhy(d) + (d.wording !== null
+      ? ". Its edit can't be applied: make the change in the text yourself, then drop this draft." : "")),
     quoteLine(d),
     d.body ? el("div", { class: "msg" }, d.body) : el("div", { class: "muted small" }, "Line edit, no comment"),
     d.wording !== null ? el("div", { class: "wording", title: "Applied as an edit if kept" }, `→ ${d.wording || "(delete the passage)"}`) : null);
   c.append(el("div", { class: "acts" },
-    el("button", { class: "primary", onclick: e => { e.stopPropagation(); triage(d.id, "keep"); } }, d.wording !== null ? "Keep & apply" : "Keep"),
+    el("button", { class: "primary", onclick: e => { e.stopPropagation(); triage(d.id, "keep", undefined, undefined, shown); } }, d.wording !== null ? "Keep & apply" : "Keep"),
     el("button", { onclick: e => { e.stopPropagation(); editDraft(c, d); } }, "Edit"),
-    el("button", { onclick: e => { e.stopPropagation(); triage(d.id, "drop"); } }, "Drop")));
+    el("button", { onclick: e => { e.stopPropagation(); triage(d.id, "drop", undefined, undefined, shown); } }, "Drop")));
   return c;
 }
 
 function askCard(a) {
+  const shown = S.st.rev;
   const c = el("div", { class: "card ask", tabindex: "-1" },
     el("div", { class: "tag" }, a.answer ? "Your agent answered" : "Question for your agent"),
     quoteLine(a),
@@ -360,7 +389,7 @@ function askCard(a) {
     a.answer && a.wording != null ? el("div", { class: "wording", title: a.applied ? "Applied as an edit" : "Proposed wording" },
       a.applied ? `✓ Applied: ${a.wording || "(passage deleted)"}` : `→ ${a.wording || "(delete the passage)"}`) : null);
   c.append(el("div", { class: "acts" },
-    a.answer && a.wording != null && !a.applied ? el("button", { class: "primary", onclick: e => { e.stopPropagation(); applyAsk(a.id); } }, "Apply wording") : null,
+    a.answer && a.wording != null && !a.applied ? el("button", { class: "primary", onclick: e => { e.stopPropagation(); applyAsk(a.id, shown); } }, "Apply wording") : null,
     a.answer ? el("button", { class: a.wording != null && !a.applied ? "" : "primary", onclick: e => { e.stopPropagation(); askComment(c, a); } }, "Comment from this") : null,
     el("button", { onclick: e => { e.stopPropagation(); dismissAsk(a.id); } }, "Dismiss")));
   return c;
@@ -375,7 +404,7 @@ function askComment(card, a, restoring = false) {
     if (!ta.value.trim()) return;
     try {
       await api("/api/ask/update", { ask: a.id, comment: ta.value, rev: S.st.rev });
-      delete S.compose[key]; S.focus = null;
+      delete S.compose[key];
     } catch (e) { fail(e); }
   };
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") closeComposer(key); });
@@ -395,8 +424,8 @@ async function reattach(id) {
   } catch (e) { fail(e); }
 }
 
-async function applyAsk(id) {
-  try { await api("/api/ask/update", { ask: id, apply: true, rev: S.st.rev }); } catch (e) { fail(e); }
+async function applyAsk(id, rev) {
+  try { await api("/api/ask/update", { ask: id, apply: true, rev }); } catch (e) { fail(e); }
 }
 
 async function dismissAsk(id) {
@@ -407,13 +436,11 @@ function composer(key, field, placeholder) {
   const ta = el("textarea", { placeholder, "data-key": `${key}:${field}` });
   ta.value = S.compose[key][field] ?? "";
   ta.addEventListener("input", () => { if (S.compose[key]) S.compose[key][field] = ta.value; });
-  ta.addEventListener("focus", () => (S.focus = `${key}:${field}`));
   return ta;
 }
 
 function closeComposer(key) {
   delete S.compose[key];
-  S.focus = null;
   buildMargin();
 }
 
@@ -424,7 +451,7 @@ function replyBox(card, t, restoring = false) {
   const ta = composer(key, "text", "Reply…");
   const send = async () => {
     if (!ta.value.trim()) return;
-    try { await api("/api/reply", { thread: t.id, body: ta.value, rev: S.st.rev }); delete S.compose[key]; S.focus = null; } catch (e) { fail(e); }
+    try { await api("/api/reply", { thread: t.id, body: ta.value, rev: S.st.rev }); delete S.compose[key]; } catch (e) { fail(e); }
   };
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") closeComposer(key); });
   card.append(ta, el("div", { class: "acts" }, el("button", { class: "primary", onclick: send }, "Send"),
@@ -443,7 +470,7 @@ function editMessage(card, t, m, restoring = false) {
     if (!ta.value.trim()) { notice("A comment needs some text.", 6000); return; }
     try {
       await api("/api/message", { thread: t.id, message: m.id, body: ta.value, rev: S.st.rev });
-      delete S.compose[key]; S.focus = null;
+      delete S.compose[key];
     } catch (e) { fail(e); }
   };
   ta.addEventListener("click", e => e.stopPropagation());
@@ -457,14 +484,15 @@ function editMessage(card, t, m, restoring = false) {
 
 function editDraft(card, d, restoring = false) {
   if ($("textarea", card)) return;
+  const shown = S.st.rev;
   const key = `draft:${d.id}`;
   S.compose[key] = S.compose[key] || { text: d.body, wording: d.wording };
   const body = composer(key, "text", "Comment");
   const wording = d.wording !== null ? composer(key, "wording", "Wording to apply") : null;
   const keep = async () => {
-    await triage(d.id, "keep", body.value, wording ? wording.value : undefined);
+    await triage(d.id, "keep", body.value, wording ? wording.value : undefined, shown);
     delete S.compose[key];
-    S.focus = null;
+   
   };
   card.append(el("div", { class: "tag" }, "Comment"), body,
     wording ? el("div", { class: "tag" }, "Wording to apply") : null, wording,
@@ -513,6 +541,7 @@ zoombox.addEventListener("keydown", e => {
 window.addEventListener("resize", () => { if (zoombox.open && zoomFit) setZoom(1, true); });
 
 function keepAllBar(drafts) {
+  const shown = S.st.rev;
   const edits = drafts.filter(d => d.wording !== null).length;
   const what = `${drafts.length} draft${drafts.length === 1 ? "" : "s"}` + (edits ? `, applying ${edits} edit${edits === 1 ? "" : "s"}` : "");
   const go = async ev => {
@@ -521,7 +550,7 @@ function keepAllBar(drafts) {
     btn.disabled = true;
     btn.textContent = "Keeping…";
     try {
-      const r = await api("/api/draft", { action: "keep_all" }, `Keeping ${what}…`);
+      const r = await api("/api/draft", { action: "keep_all", rev: shown }, `Keeping ${what}…`);
       notice(`Kept ${r.kept.length}.` + (r.left.length ? ` ${r.left.length} left for you: their passage changed, so edit or drop them.` : ""), 8000);
     } catch (e) { btn.disabled = false; btn.textContent = `Keep all ${what}`; fail(e); }
   };
@@ -530,8 +559,8 @@ function keepAllBar(drafts) {
     el("button", { class: "primary", onclick: go }, `Keep all ${what}`));
 }
 
-async function triage(id, action, body, wording) {
-  try { await api("/api/draft", { draft: id, action, body, wording, rev: S.st.rev }); } catch (e) { fail(e); throw e; }
+async function triage(id, action, body, wording, rev) {
+  try { await api("/api/draft", { draft: id, action, body, wording, rev }); } catch (e) { fail(e); throw e; }
 }
 
 function setActive(id, scroll = true) {
@@ -679,9 +708,15 @@ tool.addEventListener("click", e => {
 
 async function startEdit(block) {
   if (S.editing) return;
+  const token = Symbol("edit");
+  S.editing = { block, token };
   let src;
-  try { src = await api(`/api/source?file=${encodeURIComponent(block.dataset.file)}&lines=${block.dataset.lines}`); } catch (e) { return fail(e); }
-  S.editing = block;
+  try { src = await api(`/api/source?file=${encodeURIComponent(block.dataset.file)}&lines=${block.dataset.lines}`); }
+  catch (e) { if (S.editing && S.editing.token === token) S.editing = null; return fail(e); }
+  if (!S.editing || S.editing.token !== token || !block.isConnected) {
+    if (S.editing && S.editing.token === token) S.editing = null;
+    return;
+  }
   const kind = /\.(tex|ltx)$/.test(block.dataset.file) ? "LaTeX" : "Markdown";
   const ta = el("textarea", { spellcheck: "true", "aria-label": `${kind} source` });
   ta.value = src.text;
@@ -707,7 +742,7 @@ async function startEdit(block) {
     } catch (e) { btn.disabled = false; btn.textContent = "Save"; notice(e.message, 12000); }
   }
   function cancel() { box.replaceWith(block); done(); }
-  function done() { S.editing = null; load(true); }
+  function done() { if (S.editing && S.editing.token === token) S.editing = null; load(true); }
 }
 
 // ------------------------------------------------------------------ navigation

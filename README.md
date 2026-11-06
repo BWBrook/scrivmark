@@ -29,6 +29,10 @@ comment and accepts, rejects or replies.
 
 ## LaTeX manuscripts
 
+LaTeX needs pandoc 3.7 or later, the first version that can read LaTeX without
+reaching other files; scrivmark refuses LaTeX on older versions, and
+`scrivmark doctor` says so.
+
 scrivmark reads `.tex` sources through pandoc's LaTeX reader, so a LaTeX
 grant or paper gets the same viewer, redline, comments and rounds as a
 Markdown one. `scrivmark init` finds the documents (each file with
@@ -53,7 +57,7 @@ from `\bibliography{...}`.
 
 ## Five-minute tutorial
 
-You need `git`, `pandoc` (3.1 or later) and [`uv`](https://docs.astral.sh/uv/), on Linux, macOS or
+You need `git`, `pandoc` (3.1 or later; LaTeX manuscripts need 3.7 or later) and [`uv`](https://docs.astral.sh/uv/), on Linux, macOS or
 Windows through WSL (native Windows is not supported).
 
 ```bash

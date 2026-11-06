@@ -1,8 +1,8 @@
 """Local, git-ignored state and the write discipline shared by the CLI and viewer.
 
 Every mutation runs inside `transaction`: one exclusive lock, an optional check
-of the caller's expected revision, an intent file naming the target contents,
-then atomic replacement of each file.
+of the caller's expected revision, an intent file naming each file's contents
+before and after, then atomic replacement of each file, keeping its mode.
 """
 
 import base64
@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import json
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -54,6 +55,8 @@ def atomic_write(path: Path, data: str | bytes | None) -> None:
         fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
+    if path.exists():
+        os.chmod(tmp, path.stat().st_mode & 0o7777)
     os.replace(tmp, path)
 
 
@@ -61,16 +64,43 @@ def _intent_path(root: Path) -> Path:
     return local_dir(root) / "intent.json"
 
 
+def _digest(data: str | bytes | None) -> str | None:
+    if data is None:
+        return None
+    return hashlib.sha256(data.encode() if isinstance(data, str) else data).hexdigest()
+
+
+def _on_disk(path: Path) -> str | None:
+    return _digest(path.read_bytes()) if path.exists() else None
+
+
 def recover(root: Path) -> list[str]:
-    """Finish a write that was interrupted between its intent and completion."""
+    """Finish a write that was interrupted between its intent and completion.
+    A file still as it was before is completed and one already written is left;
+    if any changed in between (someone edited it since), nothing is written,
+    the unfinished intent is set aside, and the caller is told."""
     ip = _intent_path(root)
     if not ip.exists():
         return []
     intent = json.loads(ip.read_text())
-    for rel, content in intent.items():
-        atomic_write(root / rel, _decode(content))
+    todo, clash = [], []
+    for rel, entry in intent.items():
+        if not isinstance(entry, dict):
+            clash.append(rel)
+            continue
+        now = _on_disk(root / rel)
+        if now == entry.get("post"):
+            continue
+        (todo if now == entry.get("pre", "?") else clash).append(rel)
+    if clash:
+        kept = ip.with_name(f"intent-unfinished-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}.json")
+        os.replace(ip, kept)
+        raise ScrivError(f"An interrupted scrivmark write could not be finished: {', '.join(clash)} changed "
+                         f"since. Nothing was overwritten; what it was writing is kept in {kept}.")
+    for rel in todo:
+        atomic_write(root / rel, _decode(intent[rel]["data"]))
     ip.unlink()
-    return list(intent)
+    return todo
 
 
 @contextmanager
@@ -86,7 +116,8 @@ def transaction(root: Path, expect: str | None = None, watched: list[str] | None
             yield writes
             if writes:
                 ip = _intent_path(root)
-                atomic_write(ip, json.dumps({k: _encode(v) for k, v in writes.items()}))
+                atomic_write(ip, json.dumps({k: {"pre": _on_disk(root / k), "post": _digest(v), "data": _encode(v)}
+                                             for k, v in writes.items()}))
                 for rel, content in writes.items():
                     atomic_write(root / rel, content)
                 ip.unlink()

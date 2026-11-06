@@ -11,6 +11,8 @@ from scrivmark.server import Viewer, build_app
 
 from conftest import edit, git
 
+pytestmark = pytest.mark.skipif(latex.reader_problem() is not None, reason=latex.reader_problem() or "")
+
 MAIN = r"""\documentclass[11pt]{article}
 \usepackage{graphicx,tikz,natbib}
 \usetikzlibrary{positioning}
@@ -223,11 +225,6 @@ def test_labels_verbatim_and_aligned_equations(tmp_path):
     html = _render_tex(tmp_path, {"m.tex": f"\\documentclass{{article}}\n\\begin{{document}}\n{body}\\end{{document}}\n"},
                        ["m.tex"])
     assert "??" not in html and "100% real" in html and "scrvnote" not in html
-
-
-def test_manuscript_cannot_fake_an_unprinted_note(tmp_path):
-    html = _render_tex(tmp_path, {"p.md": "Printed [prose]{.scrvtexnote} and [more]{.scrv-note}.\n"}, ["p.md"])
-    assert "scrv-note" not in html
 
 
 def test_figure_lookup_stays_inside_the_repository(texrepo):

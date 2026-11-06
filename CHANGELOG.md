@@ -10,10 +10,62 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
-## Unreleased
+## 0.4.0 (6 November 2026)
 
+Fixes from an external audit (GPT-6 Pro, 5 November 2026); the record and its
+dispositions are in `docs/audits/2026-11-06-external-audit.md`.
+
+### Safety of edits
+
+- **A proposed edit never lands on the wrong copy of a repeated passage.** If
+  a passage appeared twice when it was anchored and one copy has since been
+  removed, its comment, draft or ask now shows as having lost its place and
+  must be re-attached; before, keeping the draft could change the other copy.
+- **Approval applies only what you saw.** Keep all, keeping or dropping one
+  draft, and applying an ask's wording are refused if a draft or answer
+  changed after the page showed it (the revision now covers drafts and asks).
+- A request that was waiting while the round was returned or closed can no
+  longer add drafts or reply to a closed round.
+- Manuscript files, the bibliography and the CSL style must be tracked files
+  inside the repository; a path outside it, through a symlink, or ignored by
+  git is refused, since its edits would not be recorded.
+- Rejecting a change to a script keeps its executable mode.
+- Recovery from an interrupted write no longer overwrites an edit made since;
+  it sets the unfinished write aside and says so.
+
+### Git and the command line
+
+- A `return` that failed part-way (say, a pre-commit hook refusing the record
+  commit) is finished properly by running it again.
+- Metadata commits contain only scrivmark's files, never other staged work.
+- A round can't start from a detached HEAD.
+- `accept --all` / `reject --all` report what they did before a refusal, in
+  text and `--json`, instead of "Nothing was changed".
+- `keep --all --expect REV` checks the revision first.
 - `scrivmark return --statement "..."` restates how the review was done, for
   when the agents or methods changed after the round started.
+
+### LaTeX and rendering
+
+- **LaTeX sources need pandoc 3.7 or later**, whose LaTeX reader cannot reach
+  other files; on older pandoc a macro could pull a local file into the page.
+  Markdown still works with pandoc 3.1, and can no longer reach the LaTeX
+  reader at all. `doctor` reports it.
+- `\input` on its own line within a paragraph renders at its place, not after
+  the paragraph.
+- Each entry of a compact one-line CSL JSON bibliography maps to its own key.
+- Filenames containing quotes render correctly.
+- Every pandoc run has a 120-second timeout.
+
+### Viewer
+
+- A comment on a repeated phrase highlights the right occurrence when
+  formatting differs (`**low**` and `low`); when unsure it marks the block.
+- Two quick clicks on Edit open one editor, not two.
+- A live update no longer steals focus or moves the caret in a reply you are
+  typing.
+- A returned round with many changes renders several times faster (repeated
+  git reads are cached).
 
 ## 0.3.0 (5 November 2026)
 

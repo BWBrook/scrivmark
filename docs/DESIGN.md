@@ -1,6 +1,6 @@
 # scrivmark design
 
-Status: revised after independent review, for lock. 3 November 2026.
+Status: design locked 3 November 2026; this document tracks what is built (6 November 2026, version 0.4).
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
 cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
@@ -9,18 +9,22 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
-## Implementation status (3 November 2026, version 0.1)
+## Implementation status (6 November 2026, version 0.4)
 
 Built: the round lifecycle over plain git, with pull requests through `gh`;
-the frozen change catalogue, decisions and undo; anchoring; the full agent
-CLI; the viewer (pandoc rendering, redline, margin, selection, flip-to-source
-editing, live updates, keyboard decisions); the tutorial and the agent guide.
+the frozen change catalogue, decisions and undo; anchoring, with orphaned
+comments re-attached from the viewer; the full agent CLI, including batches,
+dry runs, draft revision and attribution of agent-drafted work; the viewer
+(pandoc rendering, redline, margin, selection, flip-to-source editing, live
+updates, keyboard decisions, keep-all, figure zoom, editing your own
+comments); LaTeX sources; detection of makedoc profiles in `init`; the
+tutorial and the agent guide; tagged releases with an update check in
+`doctor`.
 
 Not yet built, though described below: rendering `.qmd` through Quarto
 itself, with freeze-cache code outputs (`.qmd` renders with pandoc for now);
-`scrivmark inbox`; detection of makedoc profiles and `_quarto.yml` chapter
-order in `init`; re-attaching orphaned comments from the viewer; the viewer
-starting itself on `start` and `open`. The HTML clean-up is a stdlib
+`scrivmark inbox`; `_quarto.yml` chapter order in `init`; the viewer starting
+itself on `start` and `open`. The HTML clean-up is a stdlib
 allowlist plus a Content Security Policy, not `nh3`. Supported platforms are
 Linux, macOS and WSL; the file lock uses `fcntl`, so native Windows is not
 supported.
@@ -104,8 +108,10 @@ and `R` into a list of **change units** in the record, each with a stable id
 Nothing in `B..R` goes unrepresented, so `close` can truthfully say every
 change was decided.
 
-**Thread.** A comment anchored to source text, with immutable messages and a
-status of `open` or `resolved`. Thread and message ids are random
+**Thread.** A comment anchored to source text, with messages and a status of
+`open` or `resolved`. A message can be edited by whoever wrote it until the
+other side has seen it (the reviewer's until return, the author's until
+close); after that it is fixed. Thread and message ids are random
 (`t-3f9a1c2e`), so they never collide.
 
 **Draft.** A thread the agent proposes while the round is `open`, optionally
@@ -175,13 +181,26 @@ from `R` to the working tree.
 ## Writes and consistency
 
 - Every mutation (CLI or viewer) carries the **expected revision**: a hash of
-  the affected source files and the record. It is checked and applied under
-  one lock file shared by the CLI and the server; a mismatch is refused with
-  a fresh state for the caller to retry.
+  the manuscript sources, the record, the drafts and the asks, everything the
+  human or agent saw before acting. It is checked and applied under one lock
+  file shared by the CLI and the server; a mismatch is refused with a fresh
+  state for the caller to retry. Keep-all sends the revision the page showed,
+  so a draft changed or added after the confirmation is not applied unseen.
+- Under the lock, the record is reloaded and the round's phase checked before
+  anything is written: a request that waited while the round was returned or
+  closed loses the permission it had.
 - Before a mutation that touches both source and record, scrivmark writes an
-  intent file (the target contents of each); it then replaces each file
-  atomically and removes the intent. On start-up a leftover intent is completed
-  or reported. Git is the backstop beyond that.
+  intent file (each file's hash before and after, and its new contents); it
+  then replaces each file atomically, keeping its mode, and removes the
+  intent. A leftover intent is completed only for files still as they were
+  before; if any changed since, nothing is overwritten and the intent is set
+  aside with a message. Git is the backstop beyond that.
+- Manuscript sources, the bibliography and the CSL style must be tracked files
+  inside the repository (checked on every load, and again before an edit), so
+  every edit lands on the review branch. Metadata commits name their paths
+  (`git commit --only`), so other staged work never joins them. Return is
+  sealed in a step that can be repeated: the record committed and both
+  snapshot tags pointing where it says.
 - External editors do not take the lock. The watcher notices their writes,
   and stale requests fail the revision check rather than clobbering text.
 - The record is validated against a JSON Schema on every load and write.
@@ -252,12 +271,17 @@ Hypothesis does, all against **source** text. Re-anchoring:
    characters) survives within 80 characters on both sides, the thread follows
    the new text between them (`edited`);
 3. otherwise search for `exact` with its full context; one clear winner is
-   accepted (`moved`);
+   accepted (`moved`), but only if the passage was unique with that context
+   when it was anchored;
 4. if the passage was deleted outright with its surroundings intact, the
    thread stays at the point where it was (`removed`), and the record keeps
    the deleted text, so the card reads "“…” (removed)";
 5. otherwise, or on any tie, the thread is **orphaned** and shown with its
-   quote. It is never moved silently: the human selects the passage it belongs
+   quote. That includes a passage whose lines had an identical twin when it
+   was anchored, one of which has since gone (`why: ambiguous`): which copy
+   survived is the diff's guess, not evidence, and wording applied to the
+   wrong copy would change the wrong claim (external audit, 5 November
+   2026, F01). It is never moved silently: the human selects the passage it belongs
    to and presses **Attach to selection** (`scrivmark reattach` for agents),
    and the anchor keeps what it was first about as `was`.
 
@@ -352,8 +376,19 @@ desktop app's browser pane.
 
 The server binds to loopback only, requires a per-session token on every
 request, checks `Origin` on mutations, and serves only repository files.
-Manuscript raw HTML is sanitised with `nh3`; HTML-bearing code outputs render
-in sandboxed iframes without access to the page or its API.
+Manuscript raw HTML is sanitised (a stdlib allowlist plus a Content Security
+Policy); HTML-bearing code outputs render in sandboxed iframes without access
+to the page or its API.
+
+LaTeX is read by pandoc's LaTeX reader inside a Lua filter, which must not
+reach other files: `\input`, `\lstinputlisting` and the like, even through a
+macro. Pandoc 3.7 added the sandbox that guarantees this, so LaTeX sources
+need pandoc 3.7 or later and are refused on older versions. The internal
+blocks that carry LaTeX through the Markdown pipeline carry the render nonce,
+and the filter ignores any without it, so a Markdown manuscript cannot reach
+the LaTeX reader on any version (external audit, 5 November 2026, F04).
+Every pandoc run has a 120-second timeout. TikZ pictures compile in a
+temporary directory with `openin_any=p`.
 
 ## Agent interface
 
@@ -462,4 +497,6 @@ for both Claude and Codex.
 An adversarial review by Codex (`gpt-6.1-sol`, high effort) on 3 November 2026
 returned 24 findings on the first draft; see
 `docs/audits/2026-11-03-design-review.md`. Claude (Opus 5.5) adjudicated them
-and produced this revision.
+and produced this revision. A second external audit (ChatGPT, GPT-6 Pro, 5
+November 2026) of the built system and its dispositions are in
+`docs/audits/2026-11-06-external-audit.md`.

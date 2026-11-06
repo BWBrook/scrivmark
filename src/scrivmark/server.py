@@ -26,13 +26,36 @@ from watchfiles import awatch
 from . import config, figures, gitutil, latex, record, render, review
 from .blocks import guarded_segments, line_of
 from .errors import Conflict, ScrivError, StaleRevision
-from .selection import map_selection
+from .selection import PLACEHOLDER, _plain, map_selection
 from .state import atomic_write, local_dir, read_json, revision
 
 STATIC = files("scrivmark") / "static"
 COOKIE = "scrivmark"
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
        "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+
+
+def _highlight_spec(block: str, s: int, e: int, tex: bool | dict[str, str]) -> dict | None:
+    """Where the page should mark source range [s, e) of `block`: the plain
+    text the reader sees, which occurrence of it within the block, and how many
+    occurrences there are, all counted in the same plain form the page matches
+    against. None when the range has no plain text, so the page marks the block."""
+    plain, spans = _plain(block, tex)
+    idx = [i for i, (a, z) in enumerate(spans) if a >= s and z <= e]
+    if not idx:
+        return None
+    lo, hi = idx[0], idx[-1] + 1
+    i = lo
+    while i < hi and plain[i] == PLACEHOLDER:
+        i += 1
+    j = i
+    while j < hi and plain[j] != PLACEHOLDER:
+        j += 1
+    needle = plain[i:j]
+    if not needle.strip():
+        return None
+    starts = [m for m in range(len(plain)) if plain.startswith(needle, m)]
+    return {"text": needle, "nth": starts.index(i), "count": len(starts)}
 
 
 class Viewer:
@@ -124,9 +147,10 @@ class Viewer:
             s, e = where["range"]
             out["line"] = [line_of(text, s), line_of(text, max(s, e - 1))]
             out["current"] = text[s:e]
-            seg = next((g for g in guarded_segments(text, latex.is_tex(item["anchor"]["file"])) if g.a <= s < g.z), None)
-            start = seg.b0 if seg else 0
-            out["nth"] = text[start:s].count(text[s:e]) if e > s else 0
+            tex = latex.is_tex(item["anchor"]["file"])
+            seg = next((g for g in guarded_segments(text, tex) if g.a <= s < g.z), None)
+            macros = latex.macro_text(text) if tex else False
+            out["hl"] = _highlight_spec(text[seg.b0 : seg.b1], s - seg.b0, e - seg.b0, macros) if seg and e > s else None
         else:
             out["line"] = None
         return out
@@ -337,7 +361,7 @@ def build_app(viewer: Viewer) -> Starlette:
     def triage(request: Request, b: dict):
         rv = viewer.need()
         if b.get("action") == "keep_all":
-            return JSONResponse(review.keep_all(rv, viewer.who(rv)))
+            return JSONResponse(review.keep_all(rv, viewer.who(rv), b.get("rev")))
         t = review.triage(rv, b["draft"], b["action"] == "keep", viewer.who(rv), b.get("body"),
                           b.get("wording"), b.get("rev"))
         return JSONResponse(t or {})

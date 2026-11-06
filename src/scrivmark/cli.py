@@ -142,6 +142,8 @@ def doctor(as_json: Json = False):
         for b in ms.bibliography:
             check(f"bibliography {b}", (root / b).exists())
         if any(latex.is_tex(f) for f in ms.files):
+            problem = latex.reader_problem()
+            check("pandoc ≥ 3.7 (LaTeX sources)", not problem, problem or "")
             for tool, why in (("pdftocairo", "shows PDF figures"), ("pdflatex", "draws TikZ pictures")):
                 check(f"{tool} (optional, {why})", shutil.which(tool),
                       "" if shutil.which(tool) else "not found; those figures show as placeholders", note=True)
@@ -371,7 +373,18 @@ def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_js
         raise ScrivError(f"No such change: {', '.join(unknown)}. `scrivmark changes` lists them.")
     if not ids:
         raise ScrivError("Name the changes, e.g. `scrivmark accept c1 c3`, or use --all.")
-    done = [review.decide(rv, cid, decision, _who(rv), expect if i == 0 else None) for i, cid in enumerate(ids)]
+    done = []
+    for i, cid in enumerate(ids):
+        try:
+            done.append(review.decide(rv, cid, decision, _who(rv), expect if i == 0 else None))
+        except ScrivError as e:
+            if not done:
+                raise
+            out = {"done": [c["id"] for c in done], "failed": {"id": cid, "reason": str(e)},
+                   "remaining": ids[i + 1 :], "rev": review.active(_root()).rev()}
+            _emit(out, as_json, f"{decision.capitalize()} {len(done)}: {', '.join(out['done'])}. Stopped at {cid}: {e}"
+                  + (f"\nNot attempted: {', '.join(out['remaining'])}" if out["remaining"] else ""))
+            raise typer.Exit(1) from None
     _emit(done, as_json, "\n".join(f"{c['id']} {decision}" for c in done))
 
 
@@ -594,17 +607,17 @@ def drafts_(as_json: Json = False):
 @app.command()
 def keep(draft_ids: Annotated[Optional[list[str]], typer.Argument()] = None,
          all_: Annotated[bool, typer.Option("--all", help="Keep every draft, in document order.")] = False,
-         as_json: Json = False):
+         expect: Expect = None, as_json: Json = False):
     """Keep drafts as your own comments, applying any proposed wording."""
     rv = review.active(_root())
     if all_:
-        out = review.keep_all(rv, _who(rv))
+        out = review.keep_all(rv, _who(rv), expect)
         _emit(out, as_json, f"Kept {len(out['kept'])} drafts." + "".join(
             f"\nLeft {x['id']}: {x['reason']}" for x in out["left"]))
         return
     if not draft_ids:
         raise ScrivError("Name the drafts to keep, or pass --all.")
-    out = [review.triage(rv, did, True, _who(rv)) for did in draft_ids]
+    out = [review.triage(rv, did, True, _who(rv), expect=expect if i == 0 else None) for i, did in enumerate(draft_ids)]
     _emit(out, as_json, "\n".join(f"kept {d}" for d in draft_ids))
 
 

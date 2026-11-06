@@ -119,7 +119,9 @@ author: accept, reject, reply, resolve, edit.
   author to remove.
 - **Keeping in bulk.** The viewer has a "Keep all drafts" button at the end of
   the document; `scrivmark keep --all` does the same. Drafts whose passage has
-  changed are left for the reviewer. Use it only when the reviewer asks.
+  changed are left for the reviewer. Use it only when the reviewer asks, and
+  pass `--expect` with the revision the reviewer saw (`rev` from
+  `scrivmark status --json`), so drafts changed since are not kept unseen.
 - **"Look at my selection."** Run `scrivmark selection --json`. It gives the
   file, lines and exact source text the human has selected. If `stale` is
   true, say so and ask them to reselect.
@@ -166,9 +168,17 @@ author: accept, reject, reply, resolve, edit.
 
 ## Conflicts and refusals
 
-A comment whose passage was rewritten past recognition shows as orphaned. If
-the human tells you where it belongs, `scrivmark reattach <thread> <file>
+A comment whose passage was rewritten past recognition shows as orphaned. So
+does one whose passage appeared twice when it was anchored, with one copy
+since removed (`where.why` is `ambiguous`): scrivmark cannot tell which copy
+it was about, and will not apply a draft's or ask's wording to either. If the
+human tells you where it belongs, `scrivmark reattach <thread> <file>
 --quote "..."` moves it there.
+
+`accept --all` and `reject --all` decide one change at a time. If one is
+refused, the command stops there and reports, also in `--json`, which it
+`done`, which `failed` and why, which `remaining` were not attempted, and the
+new `rev`. Read that before retrying; the done ones stay done.
 
 scrivmark refuses rather than guess: an ambiguous quote, a change it cannot
 locate exactly, a stale revision, untracked files at `return` or `close`.

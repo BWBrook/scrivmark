@@ -30,11 +30,12 @@ def _new_id(root: Path, initials: str) -> str:
     return rid
 
 
-def _commit(root: Path, message: str, paths: list[str] | None = None) -> bool:
-    gitutil.git(root, "add", "-A", *(["--", *paths] if paths else []))
-    if gitutil.ok(root, "diff", "--cached", "--quiet"):
+def _commit(root: Path, message: str, paths: list[str]) -> bool:
+    """Commit exactly `paths`; anything else staged stays staged and out of it."""
+    gitutil.git(root, "add", "-A", "--", *paths)
+    if gitutil.ok(root, "diff", "--cached", "--quiet", "--", *paths):
         return False
-    gitutil.git(root, "commit", "-q", "-m", message)
+    gitutil.git(root, "commit", "-q", "-m", message, "--only", "--", *paths)
     return True
 
 
@@ -68,6 +69,11 @@ def init(root: Path, files: list[str] | None = None, write: bool = True) -> dict
     chosen = files or found["files"]
     if not chosen:
         raise ScrivError("No Markdown, Quarto or LaTeX files found; name them: `scrivmark init paper.md`")
+    chosen = [config.inside(root, f) for f in chosen]
+    for b in found["bibliography"]:
+        config.inside(root, b, "Bibliography")
+    if found["csl"]:
+        config.inside(root, found["csl"], "CSL style")
     missing = [f for f in chosen if not (root / f).exists()]
     if missing:
         raise ScrivError(f"These files do not exist: {', '.join(missing)}")
@@ -86,11 +92,19 @@ def start(root: Path, author_branch: str | None = None, statement: str | None = 
           reviewer: config.Identity | None = None) -> Review:
     ms = config.load(root)
     _require_clean(root, "start a review")
+    tracked = set(gitutil.git(root, "ls-files", "-z", "--", *ms.sources).split("\0"))
+    untracked = [f for f in ms.sources if f not in tracked]
+    if untracked:
+        raise ScrivError(f"These sources are not tracked by git, so edits to them would not be recorded: "
+                         f"{', '.join(untracked)}. Commit them (or stop ignoring them) first.")
     me = reviewer or config.identity()
     branch = author_branch or gitutil.current_branch(root)
+    if branch == "HEAD" or not gitutil.ok(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
+        raise ScrivError(f"{branch!r} is not a local branch, so the reviewed work would have nowhere to merge. "
+                         "Check out the author's branch (or name it with --author-branch) first.")
     if branch.startswith(BRANCH_PREFIX):
         raise ScrivError(f"{branch} is already a review branch; check out the author's branch first.")
-    base = gitutil.rev(root, branch)
+    base = gitutil.rev(root, f"refs/heads/{branch}")
     rid = _new_id(root, me.initials)
     gitutil.git(root, "checkout", "-q", "-b", f"{BRANCH_PREFIX}{rid}", base)
     stmt = statement or config.default_statement(me)
@@ -126,6 +140,7 @@ def return_round(root: Path, push: bool = True, statement: str | None = None) ->
         if rv.status == "returned" and statement is not None:
             raise ScrivError("This round is already returned; its statement can no longer change.")
         if rv.status == "returned":
+            _seal_return(root, rv)
             info = {"round": rv.id, "returned": rv.rec["round"]["returned"], "changes": len(rv.rec["changes"]),
                     "threads": len(rv.rec["threads"]), "orphans": [], "resumed": True}
         else:
@@ -152,11 +167,25 @@ def _return_locked(root: Path, statement: str | None = None) -> dict:
         rv.rec["round"]["statement"] = statement.strip()
     archive_asks(rv)
     record.path(root, rv.id).write_text(record.dumps(rv.rec))
-    _commit(root, f"scrivmark: return review round {rv.id}", [rv.record_rel])
-    gitutil.git(root, "tag", "-f", TAG.format(id=rv.id, which="base"), rv.rec["round"]["base"])
-    gitutil.git(root, "tag", "-f", TAG.format(id=rv.id, which="returned"), returned)
+    _seal_return(root, rv)
     return {"round": rv.id, "returned": returned, "changes": len(rv.rec["changes"]),
             "threads": len(rv.rec["threads"]), "orphans": orphans, "pushed": False, "pr": False}
+
+
+def _seal_return(root: Path, rv: Review) -> None:
+    """The local half of a return, safe to repeat: the returned record is
+    committed and both snapshot tags name the commits it records. A retry after
+    a failure part-way finishes it without recomputing anything."""
+    if rv.record_rel in gitutil.dirty_paths(root):
+        _commit(root, f"scrivmark: return review round {rv.id}", [rv.record_rel])
+    for which in ("base", "returned"):
+        tag, sha = TAG.format(id=rv.id, which=which), rv.rec["round"][which]
+        if gitutil.ok(root, "rev-parse", "--verify", "-q", f"refs/tags/{tag}"):
+            if gitutil.rev(root, tag) != sha:
+                raise ScrivError(f"Tag {tag} points at another commit than this round records ({sha[:10]}); "
+                                 "check it with git before returning again.")
+        else:
+            gitutil.git(root, "tag", tag, sha)
 
 
 def _run(root: Path, *cmd: str) -> bool:

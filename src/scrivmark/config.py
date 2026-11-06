@@ -32,6 +32,28 @@ class Manuscript:
         return self.files + [b for b in self.bibliography if b not in self.files]
 
 
+RESERVED = (".git", ".scrivmark", "reviews")
+
+
+def inside(root: Path, rel, what: str = "Manuscript file") -> str:
+    """`rel` as a path inside the repository, or an error. Sources are edited
+    on the review branch and recorded from git, so a file outside it (by path
+    or through a symlink) would be changed with no record of the change."""
+    if not isinstance(rel, str) or not rel.strip():
+        raise ScrivError(f"{what} {rel!r} in {CONFIG} is not a file path.")
+    p = Path(rel)
+    if p.is_absolute() or ".." in p.parts:
+        raise ScrivError(f"{what} {rel!r} must be a path inside the repository, so its edits are recorded.")
+    base = root.resolve()
+    full = (root / p).resolve()
+    if base not in full.parents:
+        raise ScrivError(f"{what} {rel!r} leads outside the repository (through a symlink), so its edits "
+                         "would not be recorded. Use the file itself.")
+    if full.relative_to(base).parts[0] in RESERVED or full == base / CONFIG:
+        raise ScrivError(f"{what} {rel!r} is one of scrivmark's own files.")
+    return p.as_posix()
+
+
 def load(root: Path) -> Manuscript:
     path = root / CONFIG
     if not path.exists():
@@ -45,9 +67,14 @@ def load(root: Path) -> Manuscript:
     if not files:
         raise ScrivError(f"{CONFIG} lists no manuscript files")
     bib = m.get("bibliography") or []
+    bib = [bib] if isinstance(bib, str) else bib
+    if not isinstance(files, list) or not isinstance(bib, list):
+        raise ScrivError(f"{CONFIG}: files and bibliography must be lists of paths.")
+    files = [inside(root, f) for f in files]
+    bib = [inside(root, b, "Bibliography") for b in bib]
+    csl = inside(root, m["csl"], "CSL style") if m.get("csl") else None
     port = data.get("viewer", {}).get("port")
-    return Manuscript(root, files, [bib] if isinstance(bib, str) else bib, m.get("csl"), m.get("title"),
-                      int(port) if port else None)
+    return Manuscript(root, files, bib, csl, m.get("title"), int(port) if port else None)
 
 
 def _makedoc(root: Path) -> dict | None:

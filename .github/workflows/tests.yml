@@ -28,4 +28,13 @@ jobs:
       - name: Wheel carries its resources
         run: |
           uv build --wheel
-          python3 -m zipfile -l dist/*.whl | grep -E "static/app.js|assets/scrivmark.lua|tutorial/paper.md|skill/SKILL.md"
+          python3 - <<'PY'
+          import glob, zipfile
+          names = set(zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist())
+          need = ["static/app.js", "static/app.css", "static/index.html", "assets/scrivmark.lua", "assets/latex.lua",
+                  "assets/citations.lua", "assets/citecache.lua", "assets/template.html", "tutorial/paper.md",
+                  "skill/SKILL.md"]
+          missing = [n for n in need if f"scrivmark/{n}" not in names]
+          assert not missing, f"wheel lacks {missing}"
+          print("wheel has all", len(need), "resources")
+          PY

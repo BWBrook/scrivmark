@@ -10,7 +10,11 @@ styled span.
 """
 
 import re
+import subprocess
+from functools import lru_cache
 from pathlib import Path
+
+from .errors import ScrivError
 
 SUFFIXES = (".tex", ".ltx")
 HEADING = re.compile(r"^\s*\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*[\[{]")
@@ -47,8 +51,39 @@ SYMBOLS = {"\\%": "%", "\\&": "&", "\\$": "$", "\\_": "_", "\\#": "#", "\\{": "{
            "\\qquad": " ", "\\thinspace": " ", "\\textendash": "-", "\\textemdash": "-"}
 
 
+LATEX_MIN_PANDOC = (3, 7)
+
+
 def is_tex(path: str) -> bool:
     return path.endswith(SUFFIXES)
+
+
+@lru_cache(maxsize=1)
+def pandoc_version() -> tuple[int, ...]:
+    """The installed pandoc's version, or () if it is not installed."""
+    try:
+        out = subprocess.run(["pandoc", "--version"], capture_output=True, text=True, timeout=30).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ()
+    m = re.match(r"pandoc\S*\s+(\d+(?:\.\d+)*)", out)
+    return tuple(int(x) for x in m.group(1).split(".")) if m else ()
+
+
+def reader_problem() -> str | None:
+    """Why LaTeX cannot be read safely here, or None. Only pandoc 3.7 and later
+    can read LaTeX without reaching other files (the sandbox argument of
+    `pandoc.read`)."""
+    have = pandoc_version()
+    if have >= LATEX_MIN_PANDOC:
+        return None
+    shown = ".".join(map(str, have)) or "none found"
+    return (f"LaTeX manuscripts need pandoc {'.'.join(map(str, LATEX_MIN_PANDOC))} or later, which can read LaTeX "
+            f"without reaching other files; you have {shown}")
+
+
+def require_reader() -> None:
+    if (why := reader_problem()):
+        raise ScrivError(why)
 
 
 def code_part(line: str) -> str:
@@ -70,6 +105,12 @@ def _depth(code: str) -> int:
 
 def _braces(code: str) -> int:
     return len(re.findall(r"(?<!\\)\{", code)) - len(re.findall(r"(?<!\\)\}", code))
+
+
+def balanced(code: str) -> bool:
+    """Whether a fragment of comment-free source opens and closes the same
+    groups and environments."""
+    return _braces(code) == 0 and _depth(code) == 0
 
 
 def scan(text: str) -> list[tuple[int, int, str]]:
@@ -250,16 +291,18 @@ def tikz_preambles(text: str) -> tuple[str, str]:
     return full, minimal
 
 
-def code_block(body: str, cls: str = "scrv-tex") -> str:
+def code_block(body: str, nonce: str, cls: str = "scrv-tex") -> str:
+    """A fenced block that latex.lua reads as LaTeX. Only blocks carrying this
+    render's nonce are read; a Markdown manuscript cannot forge one."""
     run = max((len(m) for m in re.findall(r"`+", body)), default=0)
     fence = "`" * max(3, run + 1)
-    return f"{fence} {{.{cls}}}\n{body}\n{fence}"
+    return f'{fence} {{.{cls} n="{nonce}"}}\n{body}\n{fence}'
 
 
-def defs_block(text: str) -> str:
+def defs_block(text: str, nonce: str) -> str:
     full, minimal = tikz_preambles(text)
     body = definitions(text) + "\n%%scrv-tikz\n" + full + "\n%%scrv-tikz-min\n" + minimal
-    return code_block(body, "scrv-texdefs")
+    return code_block(body, nonce, "scrv-texdefs")
 
 
 def mark(kind: str, body: str, cid: str | None, nonce: str) -> str:
@@ -278,10 +321,20 @@ def resolve_input(root: Path, parent: str, name: str) -> str | None:
     return None
 
 
+def input_spans(body: str) -> list[tuple[int, int, str]]:
+    """(start, end, name) of each \\input or \\include in a block, in order,
+    ignoring comments."""
+    out, offset = [], 0
+    for line in body.splitlines(keepends=True):
+        out += [(offset + m.start(), offset + m.end(), m.group(1))
+                for m in INPUT.finditer(code_part(line.rstrip("\n")))]
+        offset += len(line)
+    return out
+
+
 def inputs(body: str) -> list[str]:
     """Names \\input or \\include'd in a block, in order."""
-    code = "\n".join(code_part(x) for x in body.splitlines())
-    return [m.group(1) for m in INPUT.finditer(code)]
+    return [name for _, _, name in input_spans(body)]
 
 
 def is_root(text: str) -> bool:

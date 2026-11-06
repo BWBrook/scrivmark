@@ -1,4 +1,6 @@
+import re
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from .errors import ScrivError
@@ -34,18 +36,30 @@ def current_branch(repo: Path) -> str:
     return git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
 
+SHA = re.compile(r"[0-9a-f]{40}")
+
+
 def show(repo: Path, commit: str, path: str) -> str | None:
-    proc = subprocess.run(
-        ["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True
-    )
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.decode("utf-8", errors="surrogateescape")
+    data = show_bytes(repo, commit, path)
+    return None if data is None else data.decode("utf-8", errors="surrogateescape")
 
 
 def show_bytes(repo: Path, commit: str, path: str) -> bytes | None:
+    """A file as it is in `commit`. A full SHA names fixed contents, so those
+    reads are cached; a branch or HEAD is read afresh."""
+    if SHA.fullmatch(commit):
+        return _show_at(str(Path(repo).resolve()), commit, path)
+    return _show(repo, commit, path)
+
+
+def _show(repo, commit: str, path: str) -> bytes | None:
     proc = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True)
     return proc.stdout if proc.returncode == 0 else None
+
+
+@lru_cache(maxsize=256)
+def _show_at(repo: str, commit: str, path: str) -> bytes | None:
+    return _show(repo, commit, path)
 
 
 def _nul(out: str) -> list[str]:

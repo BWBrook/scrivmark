@@ -1,6 +1,7 @@
 -- scrivmark LaTeX filter. Runs before scrivmark.lua.
 --  * reads each `scrv-tex` code block as LaTeX, with the definitions from the
---    file's preamble (carried in the preceding `scrv-texdefs` block);
+--    file's preamble (carried in the preceding `scrv-texdefs` block), but only
+--    blocks carrying this run's nonce;
 --  * turns redline marks (\textcolor{scrvdel-<nonce>-<change>}{...}) into
 --    scrv-del / scrv-ins spans, and % comments into unprinted notes;
 --  * renames LaTeX labels to scrivmark's fig-/tbl-/eq-/sec- identifiers and
@@ -214,9 +215,12 @@ local function read(src)
   return blocks:walk({ Para = only_notes })
 end
 
+-- only blocks scrivmark generated for this run (carrying its nonce) are read
+-- as LaTeX; a manuscript cannot use these classes to reach the reader.
 local convert = {
   traverse = "topdown",
   CodeBlock = function(cb)
+    if nonce == "" or cb.attributes["n"] ~= nonce then return nil end
     if cb.classes:includes("scrv-texdefs") then
       local d, full, min = cb.text:match("^(.-)\n%%%%scrv%-tikz\n(.-)\n%%%%scrv%-tikz%-min\n(.*)$")
       defs, tikz_full, tikz_min = d or cb.text, full or "", min or ""

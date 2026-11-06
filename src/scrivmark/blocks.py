@@ -12,12 +12,14 @@ until it does.
 
 import json
 import re
+import secrets
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
 
 from . import latex
+from .errors import ScrivError
 
 LIST_MARKER = re.compile(r"^\s{0,3}([-*+]|\d+[.)]|#[.)]|\(?[a-zA-Z][.)])\s+")
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
@@ -29,6 +31,15 @@ COLON_RUN = re.compile(r"^\s*(:{3,})", re.M)
 PANDOC_FROM = "markdown-raw_html-raw_attribute"
 LATEX_LUA = str(files("scrivmark") / "assets" / "latex.lua")
 HIDDEN = {"yaml", "preamble", "postamble"}
+PANDOC_TIMEOUT = 120
+GUARD_NONCE = secrets.token_hex(8)
+
+
+def run_pandoc(cmd: list[str], markdown: str | None = None, cwd=None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, input=markdown, capture_output=True, text=True, cwd=cwd, timeout=PANDOC_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise ScrivError(f"pandoc did not finish within the {PANDOC_TIMEOUT} s timeout and was stopped") from None
 
 
 @dataclass(frozen=True)
@@ -148,10 +159,15 @@ def fence_for(text: str) -> str:
     return ":" * max(8, (max(runs) if runs else 0) + 3)
 
 
-def pandoc_json(markdown: str, tex: bool = False) -> dict:
-    """Pandoc's AST for scrivmark's Markdown, with LaTeX code blocks read."""
-    cmd = ["pandoc", "-f", PANDOC_FROM, "-t", "json"] + (["--lua-filter", LATEX_LUA] if tex else [])
-    proc = subprocess.run(cmd, input=markdown, capture_output=True, text=True)
+def pandoc_json(markdown: str, tex: bool = False, nonce: str = GUARD_NONCE) -> dict:
+    """Pandoc's AST for scrivmark's Markdown, with LaTeX code blocks (carrying
+    `nonce`) read."""
+    if tex:
+        latex.require_reader()
+    cmd = ["pandoc", "-f", PANDOC_FROM, "-t", "json"]
+    if tex:
+        cmd += ["--lua-filter", LATEX_LUA, "--metadata", f"scrv-nonce={nonce}"]
+    proc = run_pandoc(cmd, markdown)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr)
     return json.loads(proc.stdout)
@@ -160,10 +176,8 @@ def pandoc_json(markdown: str, tex: bool = False) -> dict:
 @lru_cache(maxsize=256)
 def pandoc_blocks(text: str, tex: bool = False, defs: str = "") -> str:
     if tex:
-        return json.dumps(pandoc_json(defs + "\n\n" + latex.code_block(text), True)["blocks"])
-    proc = subprocess.run(
-        ["pandoc", "-f", PANDOC_FROM, "-t", "json"], input=text, capture_output=True, text=True
-    )
+        return json.dumps(pandoc_json(defs + "\n\n" + latex.code_block(text, GUARD_NONCE), True)["blocks"])
+    proc = run_pandoc(["pandoc", "-f", PANDOC_FROM, "-t", "json"], text)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr)
     return json.dumps(json.loads(proc.stdout)["blocks"])
@@ -190,7 +204,7 @@ def _wrap(text: str, segs: list[Segment], fence: str, tex: bool = False) -> str:
         elif s.kind in HIDDEN:
             continue
         else:
-            parts.append(f"{fence} {{.scrv-b}}\n{latex.code_block(body) if tex else body}\n\n{fence}\n\n")
+            parts.append(f"{fence} {{.scrv-b}}\n{latex.code_block(body, GUARD_NONCE) if tex else body}\n\n{fence}\n\n")
     return "".join(parts)
 
 
@@ -213,7 +227,7 @@ def _guard(text: str, tex: bool) -> list[Segment]:
     segs = _to_segments(text, latex.scan(text) if tex else scan(text))
     if not segs:
         return segs
-    defs = latex.defs_block(text) if tex else ""
+    defs = latex.defs_block(text, GUARD_NONCE) if tex else ""
     try:
         if tex:
             shown_segs = [s for s in segs if s.kind not in HIDDEN]

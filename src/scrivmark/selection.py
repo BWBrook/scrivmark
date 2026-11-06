@@ -8,6 +8,7 @@ selection that cannot be placed exactly falls back to the whole block.
 """
 
 import re
+import string
 
 from . import latex
 from .textdiff import tokens
@@ -37,6 +38,13 @@ def _plain(src: str, tex: bool | dict[str, str] = False) -> tuple[str, list[tupl
     if tex is not False:
         _plain_tex(src, emit, tex if isinstance(tex, dict) else {})
         return "".join(chars), spans
+    escaped, k = set(), 0
+    while k < len(src) - 1:
+        if src[k] == "\\" and src[k + 1] in string.punctuation:
+            escaped.add(k + 1)
+            k += 2
+        else:
+            k += 1
     line_start = True
     for t in tokens(src):
         if t.kind in GENERATED:
@@ -55,6 +63,9 @@ def _plain(src: str, tex: bool | dict[str, str] = False) -> tuple[str, list[tupl
                 emit(ch, t.start + 1 + i, t.start + 2 + i)
         else:
             for i, ch in enumerate(t.text):
+                if t.start + i in escaped:
+                    emit(ch, t.start + i, t.start + i + 1)
+                    continue
                 if ch in "*_\\`" or (line_start and ch in "#>|-+"):
                     continue
                 emit(ch, t.start + i, t.start + i + 1)

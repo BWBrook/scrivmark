@@ -12,12 +12,11 @@ import re
 from html import escape, unescape
 from functools import lru_cache
 import secrets
-import subprocess
 from importlib.resources import files
 from pathlib import Path
 
 from . import gitutil, latex, sanitize
-from .blocks import HIDDEN, LATEX_LUA, PANDOC_FROM, fence_for, guarded_segments, line_of, pandoc_json
+from .blocks import HIDDEN, LATEX_LUA, PANDOC_FROM, fence_for, guarded_segments, line_of, pandoc_json, run_pandoc
 from .config import Manuscript
 from .textdiff import Op, Unit, align
 
@@ -27,8 +26,12 @@ INLINE = {"Str", "Emph", "Underline", "Strong", "Strikeout", "Superscript", "Sub
           "Image", "Note", "Span"}
 
 
+def _quoted(v) -> str:
+    return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
 def _attrs(**kv) -> str:
-    return " ".join(f'{k}="{v}"' for k, v in kv.items() if v not in (None, ""))
+    return " ".join(f'{k}="{_quoted(v)}"' for k, v in kv.items() if v not in (None, ""))
 
 
 class _Builder:
@@ -39,19 +42,57 @@ class _Builder:
         self.includes = includes
         self.parts: list[str] = [self.defs + "\n\n"] if self.tex else []
         self.checks: list[tuple[int, str, str, str, str]] = []
+        self.spans: dict[int, tuple[int, int, int]] = {}
 
     def wrap(self, body: str, cls: str, s: int, e: int, change: str | None = None) -> None:
-        lines = f"{line_of(self.cur, s)}-{line_of(self.cur, max(s, e - 1))}"
+        self.parts.extend(self._emit(body, cls, s, e, change))
+
+    def _emit(self, body: str, cls: str, s: int, e: int, change: str | None = None) -> list[str]:
+        """The wrapped block, cut at each \\input that stands on its own line,
+        so the child's content comes at the include position. No cut is made
+        for an include sharing its line with text (fragments would share a
+        line range), inside a group or environment (say, within a tracked
+        change), or after a macro defined earlier in the block (the later
+        fragment, read separately, would lose it); that child follows the
+        block."""
         classes = " ".join(f".{c}" for c in cls.split())
-        attrs = _attrs(file=self.rel, lines=lines, c=change, n=self.nonce)
-        self.parts.append(f"{self.fence} {{{classes} {attrs}}}\n{self._src(body)}\n\n{self.fence}\n\n")
-        if self.tex and self.includes:
-            for name in latex.inputs(body):
-                if child := self.includes(self.rel, name):
-                    self.parts.append(INCLUDE.format(child))
+        exact = body == self.cur[s:e]
+
+        def div(text: str, a: int, z: int) -> str:
+            if exact:
+                lead = len(text) - len(text.lstrip())
+                a, z = s + a + lead, s + a + len(text.rstrip())
+            else:
+                a, z = s, e
+            lines = f"{line_of(self.cur, a)}-{line_of(self.cur, max(a, z - 1))}"
+            attrs = _attrs(file=self.rel, lines=lines, c=change, n=self.nonce)
+            return f"{self.fence} {{{classes} {attrs}}}\n{self._src(text)}\n\n{self.fence}\n\n"
+
+        out: list[str] = []
+        if not (self.tex and self.includes):
+            return [div(body, 0, len(body))]
+        pos, late = 0, []
+        for a, z, name in latex.input_spans(body):
+            child = self.includes(self.rel, name)
+            if not child:
+                continue
+            piece = "\n".join(latex.code_part(x) for x in body[pos:a].splitlines())
+            before = body[body.rfind("\n", 0, a) + 1 : a]
+            after = body[z : (body.find("\n", z) + 1 or len(body) + 1) - 1]
+            alone = not before.strip() and not latex.code_part(after).strip()
+            if alone and latex.balanced(piece) and not latex.DEFINES.search(latex.code_part(body[:a])):
+                if body[pos:a].strip():
+                    out.append(div(body[pos:a], pos, a))
+                out.append(INCLUDE.format(child))
+                pos = z
+            else:
+                late.append(child)
+        if body[pos:].strip() or not out:
+            out.append(div(body[pos:], pos, len(body)))
+        return out + [INCLUDE.format(c) for c in late]
 
     def _src(self, body: str) -> str:
-        return latex.code_block(body) if self.tex else body
+        return latex.code_block(body, self.nonce) if self.tex else body
 
     def old(self, body: str, change: str | None) -> None:
         if body.strip():
@@ -65,16 +106,19 @@ class _Builder:
     def inline(self, seg, marks: list[tuple[Unit, str | None]]) -> None:
         spliced, reverted = _splice(self.cur, seg.b0, seg.b1, marks, self.nonce, self.tex)
         cids = " ".join(sorted({c for _, c in marks if c}))
-        self.checks.append((len(self.parts), spliced, self.cur[seg.b0 : seg.b1], reverted, cids))
+        pos = len(self.parts)
+        self.checks.append((pos, spliced, self.cur[seg.b0 : seg.b1], reverted, cids))
         self.wrap(spliced, "scrv-b", seg.b0, seg.b1)
+        self.spans[pos] = (len(self.parts) - pos, seg.b0, seg.b1)
 
     def finish(self) -> list[str]:
-        for i in sorted(_verify(self.checks, self.fence, self.defs)):
+        for i in sorted(_verify(self.checks, self.fence, self.nonce, self.defs), reverse=True):
             pos, _, current, reverted, cids = self.checks[i]
-            head = self.parts[pos].split("\n", 1)[0].replace(".scrv-b", ".scrv-b .scrv-ins-block", 1)
+            count, b0, b1 = self.spans[pos]
             old = _attrs(file=self.rel, c=cids, n=self.nonce)
-            self.parts[pos] = (f"{self.fence} {{.scrv-old {old}}}\n{self._src(_historical(reverted, self.tex))}\n\n{self.fence}\n\n"
-                               f"{head}\n{self._src(current)}\n\n{self.fence}\n\n")
+            self.parts[pos : pos + count] = [
+                f"{self.fence} {{.scrv-old {old}}}\n{self._src(_historical(reverted, self.tex))}\n\n{self.fence}\n\n",
+                *self._emit(current, "scrv-b scrv-ins-block", b0, b1)]
         return self.parts
 
 
@@ -147,7 +191,7 @@ def _normal(node, mode: str):
     return node
 
 
-def _verify(checks: list[tuple[int, str, str, str, str]], fence: str, defs: str = "") -> set[int]:
+def _verify(checks: list[tuple[int, str, str, str, str]], fence: str, nonce: str, defs: str = "") -> set[int]:
     """Return the indices of checks whose spliced redline does not round-trip.
     `defs` is the LaTeX definitions block when the file is LaTeX."""
     if not checks:
@@ -155,10 +199,10 @@ def _verify(checks: list[tuple[int, str, str, str, str]], fence: str, defs: str 
     doc = [defs + "\n"] if defs else []
     for i, (_, spliced, cur, rev, _) in enumerate(checks):
         for kind, body in (("s", spliced), ("c", cur), ("r", rev)):
-            body = latex.code_block(body) if defs else body
+            body = latex.code_block(body, nonce) if defs else body
             doc.append(f"{fence} {{.scrv-g k=\"{i}{kind}\"}}\n{body}\n\n{fence}\n")
     try:
-        parsed = pandoc_json("\n".join(doc), bool(defs))
+        parsed = pandoc_json("\n".join(doc), bool(defs), nonce)
     except RuntimeError:
         return set(range(len(checks)))
     pieces = {}
@@ -252,8 +296,8 @@ def manuscript_markdown(root: Path, ms: Manuscript, nonce: str, base: str | None
         defs = ""
         if latex.is_tex(rel):
             if latex.is_root(cur):
-                root_defs = latex.defs_block(cur)
-            defs = latex.defs_block(cur) if latex.preamble(cur) or not root_defs else root_defs
+                root_defs = latex.defs_block(cur, nonce)
+            defs = latex.defs_block(cur, nonce) if latex.preamble(cur) or not root_defs else root_defs
         b = _Builder(fence_for(cur + (old or "")), rel, cur, nonce, defs, includes)
         if pending is not None:
             _author_view(b, pending.get(rel, []), idx == 0)
@@ -289,8 +333,18 @@ JSON_ID = re.compile(r'"id"\s*:\s*"([^"]+)"')
 REF_DIV = re.compile(r'<div id="ref-([^"]+)" class="csl-entry"')
 
 
+def _json_id(entry: str) -> str | None:
+    try:
+        key = json.loads(entry).get("id")
+    except (ValueError, AttributeError):
+        return next(iter(JSON_ID.findall(entry)), None)
+    return str(key) if key is not None else None
+
+
 def _bib_spans(rel: str, lines: list[str]) -> list[tuple[int, int, str | None]]:
-    """(first, last, key) for each entry of a BibTeX, CSL YAML or CSL JSON file, 0-based."""
+    """(first, last, key) for each entry of a BibTeX, CSL YAML or CSL JSON file, 0-based.
+    Entries that share a line (compact CSL JSON) each get their own key but the same
+    line range, since source ranges are whole lines."""
     if rel.endswith(".bib"):
         starts = [(i, m.group(2)) for i, line in enumerate(lines)
                   if (m := BIB_KEY.match(line)) and m.group(1).lower() not in ("comment", "string", "preamble")]
@@ -311,22 +365,26 @@ def _bib_spans(rel: str, lines: list[str]) -> list[tuple[int, int, str | None]]:
             out.append((i, i + stop - 1, key))
         return out
     if rel.endswith(".json"):
-        out, depth, start, in_str, esc = [], 0, 0, False, False
+        out, depth, start, in_str, esc, buf = [], 0, 0, False, False, []
         for i, line in enumerate(lines):
-            for ch in line:
+            for ch in line + "\n":
                 if in_str:
                     in_str, esc = (not (ch == '"' and not esc)), (ch == "\\" and not esc)
-                elif ch == '"':
+                    if depth >= 2:
+                        buf.append(ch)
+                    continue
+                if ch == '"':
                     in_str = True
                 elif ch in "[{":
                     depth += 1
                     if depth == 2:
-                        start = i
+                        start, buf = i, []
                 elif ch in "]}":
                     if depth == 2:
-                        key = next((m.group(1) for line in lines[start:i + 1] if (m := JSON_ID.search(line))), None)
-                        out.append((start, i, key))
+                        out.append((start, i, _json_id("".join(buf) + ch)))
                     depth -= 1
+                if depth >= 2:
+                    buf.append(ch)
         return out
     return []
 
@@ -379,11 +437,13 @@ def cite_cache(root: Path, keep: int = 40) -> Path:
 @lru_cache(maxsize=1)
 def _math_flag() -> str:
     """--mathml became --math-method=mathml in later pandoc releases."""
-    help_text = subprocess.run(["pandoc", "--help"], capture_output=True, text=True).stdout
+    help_text = run_pandoc(["pandoc", "--help"]).stdout
     return "--math-method=mathml" if "--math-method" in help_text else "--mathml"
 
 
 def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str, str]:
+    if any(latex.is_tex(f) for f in ms.files):
+        latex.require_reader()
     cmd = [
         "pandoc", "-f", PANDOC_FROM, "-t", "html5", _math_flag(), "--wrap=none", "--standalone",
         "--template", str(ASSETS / "template.html"),
@@ -397,7 +457,7 @@ def to_html(root: Path, ms: Manuscript, markdown: str, nonce: str) -> tuple[str,
         cmd += ["--bibliography", str(root / bib)]
     if ms.csl:
         cmd += ["--csl", str(root / ms.csl)]
-    proc = subprocess.run(cmd, input=markdown, capture_output=True, text=True, cwd=root)
+    proc = run_pandoc(cmd, markdown, cwd=root)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr)
     return proc.stdout, proc.stderr

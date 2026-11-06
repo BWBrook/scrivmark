@@ -4,13 +4,14 @@ threads and drafts. Lifecycle transitions live in `rounds`."""
 import hashlib
 import json
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from . import config, gitutil, latex, record
 from .errors import Conflict, ScrivError
-from .state import local_dir, read_json, revision, transaction
+from .state import LOCAL, local_dir, read_json, revision, transaction
 from .textdiff import diff_units, projection
 
 BRANCH_PREFIX = "review/"
@@ -44,12 +45,21 @@ class Review:
         files = set(self.ms.sources) | {c["file"] for c in self.rec["changes"]} | {self.record_rel}
         return sorted(files)
 
+    def guarded(self) -> list[str]:
+        """Everything a human or agent sees before acting: the manuscript, the
+        record, drafts and asks. A revision of these is what `--expect` checks."""
+        return self.watched() + [self.drafts_rel, self.asks_rel]
+
     def rev(self) -> str:
-        return revision(self.root, self.watched() + [self.drafts_rel])
+        return revision(self.root, self.guarded())
 
     @property
     def drafts_rel(self) -> str:
         return str((local_dir(self.root, self.id) / "drafts.json").relative_to(self.root))
+
+    @property
+    def asks_rel(self) -> str:
+        return str((local_dir(self.root, self.id) / "asks.json").relative_to(self.root))
 
     def text(self, rel: str) -> str | None:
         p = self.root / rel
@@ -57,6 +67,40 @@ class Review:
 
     def reload(self) -> None:
         self.rec = record.load(self.root, self.id)
+
+
+LIVE = ("open", "returned")
+OPEN = ("open",)
+RETURNED = ("returned",)
+PHASE_ERROR = {
+    OPEN: "Drafts belong to the reviewer, before the round is returned.",
+    RETURNED: "Only a returned round has changes to decide.",
+}
+
+
+@contextmanager
+def _locked(rv: Review, expect: str | None, allowed: tuple[str, ...]):
+    """Take the lock, check `expect`, reload the record and only then check
+    the round's phase: a request that waited for the lock while the round was
+    returned or closed must not act on what it saw before."""
+    with transaction(rv.root, expect, rv.guarded()) as writes:
+        rv.reload()
+        if rv.status not in allowed:
+            raise ScrivError("This round is closed." if rv.status == "closed" else
+                             PHASE_ERROR.get(allowed, f"Round {rv.id} is {rv.status}; that needs it {' or '.join(allowed)}."))
+        yield writes
+        for rel in writes:
+            if rel != rv.record_rel and not rel.startswith(f"{LOCAL}/"):
+                writable(rv, rel)
+
+
+def writable(rv: Review, rel: str) -> None:
+    """A manuscript file may be written only if it is inside the repository
+    and tracked by git, checked at the moment of writing: an edit to anything
+    else would never reach the review's record."""
+    config.inside(rv.root, rel)
+    if not gitutil.ok(rv.root, "ls-files", "--error-unmatch", "--", rel):
+        raise ScrivError(f"{rel} is not tracked by git, so an edit to it would not be recorded. Commit it first.")
 
 
 def active(root: Path, round_id: str | None = None) -> Review:
@@ -216,8 +260,7 @@ def _find_change(rv: Review, cid: str) -> dict:
 def decide(rv: Review, cid: str, decision: str, who: str, expect: str | None = None) -> dict:
     if rv.status != "returned":
         raise ScrivError("Changes are decided after the reviewer returns the round.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, RETURNED) as writes:
         c = _find_change(rv, cid)
         if c["decision"]:
             raise ScrivError(f"{cid} is already {c['decision']}")
@@ -260,8 +303,7 @@ def undo(rv: Review, cid: str, expect: str | None = None) -> dict:
     only where scrivmark's own restoration is still exactly in place."""
     if rv.status != "returned":
         raise ScrivError("Decisions can be reopened only while the round is with the author.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, RETURNED) as writes:
         c = _find_change(rv, cid)
         if not c["decision"]:
             raise ScrivError(f"{cid} has no decision to undo.")
@@ -363,6 +405,30 @@ def _context_score(text: str, i: int, a: dict) -> int:
     return left + right
 
 
+def _lost_twin(old: str, a: dict, pr) -> bool:
+    """The passage had a twin when it was anchored (the same text with the
+    same stored context, or the same whole lines) and some copy of it did not
+    survive. Which copy is left is then the diff's guess, not evidence."""
+    s, e = a["range"]
+    full = len(a["prefix"]) + len(a["suffix"])
+    twins = [i for i in _occurrences(old, a["exact"]) if i != s and _context_score(old, i, a) == full]
+    if a["exact"] and twins and any(pr.range(i, i + e - s) is None for i in [s, *twins]):
+        return True
+    ls = old.rfind("\n", 0, s) + 1
+    le = old.find("\n", e)
+    le = len(old) if le < 0 else le
+    block = old[ls:le]
+    if not block.strip():
+        return False
+    i = old.find(block)
+    while i >= 0:
+        whole = (i == 0 or old[i - 1] == "\n") and (i + len(block) == len(old) or old[i + len(block)] == "\n")
+        if i != ls and whole and pr.range(i + s - ls, i + e - ls) is None:
+            return True
+        i = old.find(block, i + 1)
+    return False
+
+
 def resolve(rv: Review, a: dict) -> dict:
     """Locate an anchor in the current text.
 
@@ -381,9 +447,14 @@ def resolve(rv: Review, a: dict) -> dict:
     if cur is None:
         return {"state": "orphan", "candidates": []}
     old = _text_at(rv, a["file"], a["rev"])
+    hits = _occurrences(cur, a["exact"])
+    full = len(a["prefix"]) + len(a["suffix"])
+    unsure = {"state": "orphan", "why": "ambiguous", "candidates": [[i, i + len(a["exact"])] for i in hits]}
     if old is not None:
         pr = projection(old, cur)
         s, e = a["range"]
+        if _lost_twin(old, a, pr):
+            return unsure
         r = pr.range(s, e)
         if r and cur[r[0] : r[1]] == a["exact"]:
             return {"state": "ok", "how": "exact", "range": list(r)}
@@ -396,9 +467,10 @@ def resolve(rv: Review, a: dict) -> dict:
             return {"state": "ok", "how": "edited", "edited": True, "range": list(near)}
     else:
         near = None
-    hits = _occurrences(cur, a["exact"])
-    full = len(a["prefix"]) + len(a["suffix"])
     whole = [i for i in hits if _context_score(cur, i, a) == full]
+    twins = old is not None and sum(1 for i in _occurrences(old, a["exact"]) if _context_score(old, i, a) == full) > 1
+    if len(whole) == 1 and a["exact"] and twins:
+        return unsure
     if len(whole) == 1 and a["exact"]:
         i = whole[0]
         return {"state": "ok", "how": "moved", "range": [i, i + len(a["exact"])]}
@@ -424,8 +496,7 @@ def threads(rv: Review) -> list[dict]:
 def comment(rv: Review, anchor: dict, body: str, who: str, expect: str | None = None) -> dict:
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, LIVE) as writes:
         t = {
             "id": record.new_id("t"), "status": "open", "anchor": anchor,
             "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": body}],
@@ -443,8 +514,8 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
     if any(i.get("draft") for i in items) and rv.status != "open":
         raise ScrivError("Drafts belong to the reviewer, before the round is returned.")
     out = []
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    phase = OPEN if any(i.get("draft") for i in items) else LIVE
+    with _locked(rv, expect, phase) as writes:
         ds = read_json(rv.root / rv.drafts_rel, [])
         for i in items:
             if i.get("draft"):
@@ -493,8 +564,7 @@ def source_comments(rv: Review, importer: str) -> list[dict]:
 
 
 def reply(rv: Review, tid: str, body: str, who: str, expect: str | None = None) -> dict:
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, LIVE) as writes:
         t = _thread(rv, tid)
         t["messages"].append({"id": record.new_id("m"), "by": who, "at": record.now(), "body": body})
         t["status"] = "open"
@@ -521,8 +591,7 @@ def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: st
     seen it. If an agent drafted it, the drafted text stays in its history."""
     if not body.strip():
         raise ScrivError("A comment needs some text.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, LIVE) as writes:
         t = _thread(rv, tid)
         m = next((x for x in t["messages"] if x["id"] == mid), None)
         if m is None:
@@ -540,8 +609,7 @@ def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: st
 
 
 def set_thread(rv: Review, tid: str, status: str, expect: str | None = None) -> dict:
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, LIVE) as writes:
         t = _thread(rv, tid)
         t["status"] = status
         writes[rv.record_rel] = record.dumps(rv.rec)
@@ -552,8 +620,7 @@ def reattach(rv: Review, tid: str, anchor: dict, expect: str | None = None) -> d
     """Give a thread a new passage, by hand, keeping what it was first about."""
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, LIVE) as writes:
         t = _thread(rv, tid)
         t["anchor"] = dict(anchor, was=t["anchor"].get("was") or t["anchor"].get("removed") or t["anchor"]["exact"])
         writes[rv.record_rel] = record.dumps(rv.rec)
@@ -590,7 +657,7 @@ def add_draft(rv: Review, anchor: dict, body: str, wording: str | None, expect: 
               by: str | None = None) -> dict:
     if rv.status != "open":
         raise ScrivError("Drafts belong to the reviewer, before the round is returned.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+    with _locked(rv, expect, OPEN) as writes:
         ds = read_json(rv.root / rv.drafts_rel, [])
         d = {"id": record.new_id("d"), "anchor": anchor, "body": body, "wording": wording, "at": record.now(), "by": by}
         ds.append(d)
@@ -651,7 +718,7 @@ def revise_draft(rv: Review, did: str, body: str | None = None, wording: str | N
     draft is kept."""
     if rv.status != "open":
         raise ScrivError("Drafts belong to the reviewer, before the round is returned.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+    with _locked(rv, expect, OPEN) as writes:
         ds = read_json(rv.root / rv.drafts_rel, [])
         d = next((x for x in ds if x["id"] == did), None)
         if d is None:
@@ -673,14 +740,13 @@ def revise_draft(rv: Review, did: str, body: str | None = None, wording: str | N
     return d
 
 
-def keep_all(rv: Review, who: str) -> dict:
+def keep_all(rv: Review, who: str, expect: str | None = None) -> dict:
     """Keep every draft, in document order, in one transaction. A draft whose
     wording can no longer be applied (its passage changed, or an earlier draft
     in this batch rewrote part of it) stays for the reviewer to edit or drop."""
     order = {f: i for i, f in enumerate(rv.ms.sources)}
     refusal = "The draft's passage has been edited since it was written, so its wording was not applied."
-    with transaction(rv.root, None, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, OPEN) as writes:
         ds = read_json(rv.root / rv.drafts_rel, [])
         placed = []
         for d in ds:
@@ -772,8 +838,7 @@ def triage(rv: Review, did: str, keep: bool, who: str, body: str | None = None,
            wording: str | None = None, expect: str | None = None) -> dict | None:
     """Keep a draft as the reviewer's own (applying any wording as a real edit),
     or drop it."""
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
-        rv.reload()
+    with _locked(rv, expect, OPEN) as writes:
         ds = read_json(rv.root / rv.drafts_rel, [])
         d = next((x for x in ds if x["id"] == did), None)
         if d is None:
@@ -810,7 +875,7 @@ def asks(rv: Review, include_done: bool = False) -> list[dict]:
 
 
 def add_ask(rv: Review, anchor: dict, question: str, who: str) -> dict:
-    with transaction(rv.root) as writes:
+    with _locked(rv, None, LIVE) as writes:
         items = read_json(_asks_path(rv), [])
         item = {"id": record.new_id("q"), "anchor": anchor, "question": question, "by": who, "answer": None,
                 "at": record.now(), "done": False}
@@ -821,7 +886,7 @@ def add_ask(rv: Review, anchor: dict, question: str, who: str) -> dict:
 
 def update_ask(rv: Review, qid: str, answer: str | None = None, done: bool | None = None,
                wording: str | None = None, by: str | None = None) -> dict:
-    with transaction(rv.root) as writes:
+    with _locked(rv, None, LIVE) as writes:
         items = read_json(_asks_path(rv), [])
         item = next((a for a in items if a["id"] == qid), None)
         if item is None:
@@ -839,7 +904,7 @@ def apply_ask(rv: Review, qid: str, expect: str | None = None) -> dict:
     anchored to the new text, so it can still become a comment."""
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
-    with transaction(rv.root, expect, rv.watched() + [rv.drafts_rel]) as writes:
+    with _locked(rv, expect, LIVE) as writes:
         items = read_json(_asks_path(rv), [])
         item = next((a for a in items if a["id"] == qid), None)
         if item is None:
@@ -874,6 +939,10 @@ def replace_lines(rv: Review, rel: str, first: int, last: int, new_text: str, fi
     if rel not in rv.ms.sources:
         raise ScrivError(f"{rel} is not a manuscript file")
     with transaction(rv.root, file_rev, [rel]) as writes:
+        rv.reload()
+        if rv.status not in LIVE:
+            raise ScrivError("This round is closed.")
+        writable(rv, rel)
         lines = rv.text(rel).splitlines(keepends=True)
         if not (1 <= first <= last <= len(lines)):
             raise ScrivError("Those lines are no longer in the file; reload.")
