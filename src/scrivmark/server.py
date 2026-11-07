@@ -81,11 +81,30 @@ class Viewer:
     def mode(self, rv: review.Review | None) -> str:
         if rv is None:
             return "read"
-        return {"open": "reviewer", "returned": "author", "closed": "closed"}[rv.status]
+        if rv.status == "closed":
+            return "closed"
+        if self.other_side(rv):
+            return "waiting"
+        return {"open": "reviewer", "returned": "author", "responded": "signoff"}[rv.status]
+
+    def other_side(self, rv: review.Review) -> bool:
+        """Whether the person at this viewer is the side whose turn it is not,
+        as far as their identity shows (the reviewer looking at a round the
+        authors hold, or the reverse). Their viewer is then read-only."""
+        rnd = rv.rec["round"]
+        if rnd.get("author") and rnd["author"]["name"] == rnd["reviewer"]["name"]:
+            return False
+        try:
+            me = config.identity(self.root).name
+        except ScrivError:
+            return False
+        if review.acting(rv.rec) == "author":
+            return me == rnd["reviewer"]["name"]
+        return bool(rnd.get("author")) and me == rnd["author"]["name"]
 
     def who(self, rv: review.Review) -> str:
         rnd = rv.rec["round"]
-        if rnd["status"] == "open":
+        if review.acting(rv.rec) == "reviewer":
             return rnd["reviewer"]["initials"]
         return (rnd["author"] or {"initials": config.identity().initials})["initials"]
 
@@ -124,9 +143,9 @@ class Viewer:
             return self.cache[1]
         mode = self.mode(rv)
         base, pending = None, None
-        if rv and rv.status in ("open", "returned"):
+        if rv and rv.status in ("open", "returned", "responded"):
             base = rv.rec["round"]["base"]
-        if rv and rv.status == "returned":
+        if rv and rv.status in ("returned", "responded"):
             pending = {}
             for c in rv.rec["changes"]:
                 if c["type"] != "file" and review.change_status(rv, c) == "pending":
@@ -144,17 +163,26 @@ class Viewer:
             "rev": rv.rev() if rv else None,
             "me": self.who(rv) if rv else None,
             "threads": [], "drafts": [], "asks": [], "changes": [],
+            "news": None,
         }
         if rv:
             me = self.who(rv)
-            data["threads"] = [dict(self._place(rv, t), editable=[m["id"] for m in t["messages"] if review.can_edit(rv, m, me)])
+            waiting = mode == "waiting"
+            window = review.news_window(rv.rec)
+            fresh = lambda at: review._within(at, window)  # noqa: E731
+            data["news"] = {"since": window[0], "until": window[1]}
+            data["threads"] = [dict(self._place(rv, t),
+                                    editable=[] if waiting else [m["id"] for m in t["messages"] if review.can_edit(rv, m, me)],
+                                    new=any(fresh(m["at"]) for m in t["messages"])
+                                    or fresh((t.get("resolved_by") or {}).get("at")))
                                for t in review.threads(rv)]
             if rv.status == "open":
                 data["drafts"] = [self._place(rv, d) for d in review.drafts(rv)]
-            if rv.status in ("open", "returned"):
+            if rv.status in ("open", "returned", "responded"):
                 data["asks"] = [self._place(rv, a) for a in review.asks(rv)]
-            if rv.status in ("returned", "closed"):
-                data["changes"] = review.changes(rv)
+            if rv.status in ("returned", "responded", "closed"):
+                data["changes"] = [dict(c, new=fresh(c.get("at")) or any(fresh(k["at"]) for k in c.get("contested", [])))
+                                   for c in review.changes(rv)]
         self.cache = (key, data)
         return data
 
@@ -252,6 +280,19 @@ def build_app(viewer: Viewer) -> Starlette:
         async def inner(request: Request):
             if not authorised(request):
                 return JSONResponse({"error": "Not authorised. Open the address scrivmark printed."}, status_code=403)
+            if mutate and request.url.path not in ("/api/selection", "/api/source"):
+                try:
+                    sent = json.loads(await request.body() or b"{}")
+                except ValueError:
+                    sent = {}
+                if not sent.get("rev"):
+                    return JSONResponse({"error": "This page is out of date; it has refreshed, please try again.",
+                                         "stale": True}, status_code=409)
+            if mutate and request.url.path != "/api/selection":
+                rv = viewer.current()
+                if rv and viewer.mode(rv) == "waiting":
+                    return JSONResponse({"error": "It is the other side's turn in this round, so this viewer is "
+                                         "read-only until the round comes back to you."}, status_code=403)
             if mutate:
                 origin = request.headers.get("origin")
                 if origin and origin != f"{request.url.scheme}://{request.url.netloc}":
@@ -387,12 +428,16 @@ def build_app(viewer: Viewer) -> Starlette:
         if b.get("reattach"):
             viewer.check_render(b)
             return JSONResponse(review.reattach(rv, b["thread"], viewer.anchor_from(rv, b), b.get("rev")))
-        return JSONResponse(review.set_thread(rv, b["thread"], b["status"], b.get("rev")))
+        return JSONResponse(review.set_thread(rv, b["thread"], b["status"], b.get("rev"), viewer.who(rv)))
 
     def decide(request: Request, b: dict):
         rv = viewer.need()
         decision = {"accept": "accepted", "reject": "rejected"}[b["decision"]]
-        return JSONResponse(review.decide(rv, b["change"], decision, viewer.who(rv), b.get("rev")))
+        return JSONResponse(review.decide(rv, b["change"], decision, viewer.who(rv), b.get("rev"), b.get("because")))
+
+    def contest(request: Request, b: dict):
+        rv = viewer.need()
+        return JSONResponse(review.contest(rv, b["change"], viewer.who(rv), b.get("because") or "", b.get("rev")))
 
     def undo(request: Request, b: dict):
         rv = viewer.need()
@@ -443,7 +488,7 @@ def build_app(viewer: Viewer) -> Starlette:
     def ask(request: Request, b: dict):
         rv = viewer.need()
         viewer.check_render(b)
-        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"], viewer.who(rv)))
+        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"], viewer.who(rv), b.get("rev")))
 
     def ask_update(request: Request, b: dict):
         rv = viewer.need()
@@ -459,7 +504,7 @@ def build_app(viewer: Viewer) -> Starlette:
             return JSONResponse(t)
         if b.get("apply"):
             return JSONResponse(review.apply_ask(rv, item["id"], b.get("rev")))
-        return JSONResponse(review.update_ask(rv, item["id"], done=bool(b.get("done"))))
+        return JSONResponse(review.update_ask(rv, item["id"], done=bool(b.get("done")), expect=b.get("rev")))
 
     routes = [
         Route("/", index),
@@ -480,6 +525,7 @@ def build_app(viewer: Viewer) -> Starlette:
         Route("/api/thread", guard(thread_status, True), methods=["POST"]),
         Route("/api/message", guard(message, True), methods=["POST"]),
         Route("/api/decide", guard(decide, True), methods=["POST"]),
+        Route("/api/contest", guard(contest, True), methods=["POST"]),
         Route("/api/draft", guard(triage, True), methods=["POST"]),
         Route("/api/undo", guard(undo, True), methods=["POST"]),
         Route("/api/selection", guard(selection, True), methods=["POST"]),

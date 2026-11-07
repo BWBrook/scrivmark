@@ -164,7 +164,22 @@ function restoreScroll(a) {
 
 // ------------------------------------------------------------------ drawing
 
-const MODE = { reviewer: "Reviewing", author: "Responding", read: "Reading", closed: "Closed" };
+const MODE = { reviewer: "Reviewing", author: "Responding", signoff: "Signing off", waiting: "Waiting", read: "Reading", closed: "Closed" };
+const WAITING = {
+  open: "The reviewer is reviewing this round.",
+  returned: "The authors have this round: they are deciding the changes and replying.",
+  responded: "The reviewer is signing off.",
+};
+
+function byline(by, agent) { return agent ? `${by} · ${agent}` : by; }
+function readonly() { return S.st.mode === "closed" || S.st.mode === "waiting"; }
+function decisionLine(c) {
+  return `${c.state} by ${byline(c.by, c.agent)}${c.because ? `: ${c.because}` : ""}`;
+}
+function contestLines(c) {
+  return (c.contested || []).map(k => el("div", { class: "contested" }, `contested by ${byline(k.by, k.agent)}: ${k.because}`));
+}
+function newTag() { return el("span", { class: "newtag" }, "new"); }
 
 function pending() { return S.st.changes.filter(c => c.state === "pending"); }
 
@@ -178,6 +193,7 @@ function draw() {
   $("#roundid").textContent = r ? `${r.id} · ${st.mode === "author" ? "from " + r.reviewer.name : "reviewing " + r.author_branch}${who}` : st.branch;
   const stmt = $("#statement");
   stmt.hidden = !(r && st.mode !== "reviewer");
+  if (S.waitNotice && st.mode !== "waiting") { S.waitNotice = false; notice(""); }
   if (r) stmt.textContent = r.statement;
   doc.innerHTML = st.html;
   if (st.mode === "reviewer" && st.drafts.length) doc.append(keepAllBar(st.drafts));
@@ -185,7 +201,10 @@ function draw() {
   drawOther();
   drawCounts();
   if (st.mode === "read") notice("Reading only. Start a review with `scrivmark start`, or open one with `scrivmark open <round>`.");
-  else if (st.warnings.length) notice("pandoc: " + st.warnings.join(" "), 10000);
+  else if (st.mode === "waiting") {
+    S.waitNotice = true;
+    notice(`${WAITING[r.status] || "Not your turn."} This page is read-only and updates when the round comes back to you.`);
+  } else if (st.warnings.length) notice("pandoc: " + st.warnings.join(" "), 10000);
   requestAnimationFrame(() => { buildMargin(); if (Q.open) { drawQueue(); queueStatus(); } });
 }
 
@@ -198,7 +217,12 @@ function drawCounts() {
   if (st.mode === "author") {
     const p = pending().length;
     txt = `${p} change${p === 1 ? "" : "s"} to decide · ` + txt;
+  } else if (st.mode === "signoff" && pending().length) {
+    const p = pending().length;
+    txt = `${p} contested change${p === 1 ? "" : "s"} with the authors · ` + txt;
   }
+  const fresh = st.threads.filter(t => t.new).length + st.changes.filter(c => c.new).length;
+  if (fresh && st.mode !== "reviewer") txt += ` · ${fresh} new`;
   $("#counts").textContent = st.round ? txt : "";
   const hint = $("#hint");
   let h = "";
@@ -206,14 +230,25 @@ function drawCounts() {
     ? "Keep or drop each yellow draft before returning the review."
     : "When you have finished, run `scrivmark return` to hand the review back.";
   if (st.mode === "author" && !pending().length && !open) h = "Everything is decided. Run `scrivmark close` to merge the review.";
+  if (st.mode === "signoff") h = "Reply, resolve or reopen comments, and contest any decision from Items. Then run `scrivmark close`, or `scrivmark return` to send it back to the authors.";
   hint.textContent = h;
   hint.hidden = !h;
 }
 
-function decisionButtons(c) {
+function reasonInput() {
+  return el("input", { type: "text", class: "reason", placeholder: "Reason (optional)", "aria-label": "Reason for the decision (optional)" });
+}
+
+function decisionButtons(c, reason) {
+  const why = () => (reason && reason.value.trim()) || undefined;
   return [
-    el("button", { class: "primary", onclick: () => decide(c.id, "accept") }, "Accept"),
-    el("button", { onclick: () => decide(c.id, "reject") }, "Reject")];
+    el("button", { class: "primary", onclick: () => decide(c.id, "accept", why()) }, "Accept"),
+    el("button", { onclick: () => decide(c.id, "reject", why()) }, "Reject")];
+}
+
+function decisionActs(c) {
+  const reason = reasonInput();
+  return el("div", { class: "acts" }, reason, ...decisionButtons(c, reason));
 }
 
 function drawOther() {
@@ -224,12 +259,12 @@ function drawOther() {
   const rows = [
     ...unplaced.map(c => el("div", { class: "row other", "data-q": c.id, tabindex: "-1" },
       el("div", { class: "what" }, el("div", { class: "muted small" }, `${c.id} · ${c.file} · not shown in the running text`),
-        el("pre", { class: "diff-old" }, c.base || "(nothing)"), el("pre", { class: "diff-new" }, c.reviewer || "(removed)")),
-      st.mode === "author" ? el("div", { class: "acts" }, ...decisionButtons(c)) : null)),
+        el("pre", { class: "diff-old" }, c.base || "(nothing)"), el("pre", { class: "diff-new" }, c.reviewer || "(removed)"), ...contestLines(c)),
+      st.mode === "author" ? decisionActs(c) : null)),
     ...files.map(c => el("div", { class: "row", "data-q": c.state === "pending" ? c.id : null, tabindex: "-1" },
       el("div", { class: "what" }, `${c.id} · ${c.reviewer} — ${c.state}`,
         el("div", { class: "muted small" }, `To inspect: git diff ${st.round.base.slice(0, 8)} ${(st.round.returned || "").slice(0, 8)} -- ${c.file}`)),
-      c.state === "pending" && st.mode === "author" ? el("div", { class: "acts" }, ...decisionButtons(c)) : null)),
+      c.state === "pending" && st.mode === "author" ? decisionActs(c) : null)),
   ];
   box.hidden = !rows.length;
   box.replaceChildren(el("div", { class: "muted" }, "Changes outside the running text:"), ...rows);
@@ -255,13 +290,14 @@ function decorate() {
         onclick: e => { e.stopPropagation(); startEdit(b); } }, "✎"));
     }
   }
-  if (S.st.mode === "author") {
+  if (S.st.mode === "author" || S.st.mode === "signoff") {
     const ids = new Set(pending().map(c => c.id));
     for (const x of $$("[data-c]", doc)) {
       if (!x.dataset.c.split(" ").some(id => ids.has(id))) continue;
       x.tabIndex = 0;
       x.setAttribute("role", "button");
-      x.setAttribute("aria-label", "Tracked change: press Enter to accept or reject");
+      x.setAttribute("aria-label", S.st.mode === "author" ? "Tracked change: press Enter to accept or reject"
+        : "Contested change: press Enter to see why");
     }
   }
   for (const t of [...S.st.threads, ...S.st.drafts]) if (t.line) highlight(t);
@@ -399,6 +435,7 @@ function quoteLine(it) {
 function threadCard(t) {
   const orphan = !t.line;
   const c = el("div", { class: `card ${t.status}${orphan ? " orphan" : ""}`, tabindex: "-1" },
+    t.new ? newTag() : null,
     orphan ? el("div", { class: "tag" }, lostWhy(t)) : null,
     quoteLine(t),
     ...t.messages.map(m => el("div", { class: "msg", "data-m": m.id },
@@ -406,9 +443,11 @@ function threadCard(t) {
         ? el("button", { class: "msgedit", title: "Edit your comment (until the other side has seen it)",
             onclick: e => { e.stopPropagation(); editMessage(c, t, m); } }, "Edit")
         : null,
-      el("span", { class: "by" }, m.by), m.body,
-      m.edited_at ? el("span", { class: "muted small" }, " (edited)") : null)));
-  if (!S.st.round || S.st.mode === "closed") return c;
+      el("span", { class: "by" }, byline(m.by, m.agent)), m.body,
+      m.edited_at ? el("span", { class: "muted small" }, " (edited)") : null)),
+    t.status === "resolved" && t.resolved_by
+      ? el("div", { class: "muted small resolvedby" }, `resolved by ${byline(t.resolved_by.by, t.resolved_by.agent)}`) : null);
+  if (!S.st.round || readonly()) return c;
   c.append(el("div", { class: "acts" },
     orphan ? el("button", { class: "primary", title: "Select the passage in the text first",
       onmousedown: e => e.preventDefault(), onclick: e => { e.stopPropagation(); reattach(t.id); } }, "Attach to selection") : null,
@@ -492,7 +531,7 @@ async function applyAsk(id, rev) {
 }
 
 async function dismissAsk(id) {
-  try { await api("/api/ask/update", { ask: id, done: true }); } catch (e) { fail(e); }
+  try { await api("/api/ask/update", { ask: id, done: true, rev: S.st.rev }); } catch (e) { fail(e); }
 }
 
 function composer(key, field, placeholder) {
@@ -539,7 +578,7 @@ function editMessage(card, t, m, restoring = false) {
   };
   ta.addEventListener("click", e => e.stopPropagation());
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save(); if (e.key === "Escape") closeComposer(key); });
-  row.replaceChildren(el("span", { class: "by" }, m.by), ta, el("div", { class: "acts" },
+  row.replaceChildren(el("span", { class: "by" }, byline(m.by, m.agent)), ta, el("div", { class: "acts" },
     el("button", { class: "primary", onclick: e => { e.stopPropagation(); save(); } }, "Save"),
     el("button", { onclick: e => { e.stopPropagation(); closeComposer(key); } }, "Cancel")));
   if (!restoring) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
@@ -641,10 +680,10 @@ function setActive(id, scroll = true) {
 
 // ------------------------------------------------------------------ changes
 
-async function decide(id, decision) {
+async function decide(id, decision, because) {
   closePop();
   try {
-    await api("/api/decide", { change: id, decision, rev: S.st.rev });
+    await api("/api/decide", { change: id, decision, rev: S.st.rev, ...(because ? { because } : {}) });
     notice(`${id} ${decision === "accept" ? "accepted" : "rejected"}.`, 8000, { label: "Undo", run: () => undo(id) });
   } catch (e) { fail(e); }
 }
@@ -657,12 +696,18 @@ function openDecision(target) {
   const ids = target.dataset.c.split(" ");
   const cs = ids.map(id => S.st.changes.find(c => c.id === id)).filter(c => c && c.state === "pending");
   if (!cs.length) return;
-  pop.replaceChildren(...cs.map(c => el("div", {},
-    el("div", { class: "diff" }, el("del", {}, c.base || "∅"), " → ", el("ins", {}, c.reviewer || "∅")),
-    el("div", { class: "acts" }, ...decisionButtons(c)))));
+  const deciding = S.st.mode === "author";
+  pop.replaceChildren(...cs.map(c => {
+    const reason = deciding ? reasonInput() : null;
+    return el("div", {},
+      el("div", { class: "diff" }, el("del", {}, c.base || "∅"), " → ", el("ins", {}, c.reviewer || "∅")),
+      ...contestLines(c),
+      deciding ? reason : el("div", { class: "muted small" }, "Contested: the authors decide this again."),
+      deciding ? el("div", { class: "acts" }, ...decisionButtons(c, reason)) : null);
+  }));
   S.popReturn = target;
   place(pop, target.getBoundingClientRect());
-  $("button", pop).focus();
+  (deciding ? $("button", pop) : pop).focus();
 }
 
 function closePop() {
@@ -674,7 +719,7 @@ function closePop() {
 
 doc.addEventListener("click", e => {
   const ch = e.target.closest("[data-c]");
-  if (!ch || S.st.mode !== "author") return;
+  if (!ch || (S.st.mode !== "author" && S.st.mode !== "signoff")) return;
   e.stopPropagation();
   openDecision(ch);
 });
@@ -685,6 +730,7 @@ doc.addEventListener("keydown", e => {
 });
 
 pop.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+pop.tabIndex = -1;
 
 function place(box, rect) {
   box.hidden = false;
@@ -732,7 +778,7 @@ document.addEventListener("selectionchange", () => {
 });
 
 async function onSelection() {
-  if (!S.st || !S.st.round || S.st.mode === "closed" || S.editing) return;
+  if (!S.st || !S.st.round || readonly() || S.editing) return;
   const s = currentSelection();
   if (!s) {
     tool.hidden = true;
@@ -764,7 +810,7 @@ tool.addEventListener("click", e => {
     try {
       const where = { file: s.file, lines: s.lines, text: s.text, before: s.before, key: s.key };
       if (act === "comment") await api("/api/comment", { ...where, body: ta.value, rev: S.st.rev });
-      else { await api("/api/ask", { ...where, question: ta.value }); notice("Your question is in the margin. When you're ready, tell your agent: “check my asks”.", 7000); }
+      else { await api("/api/ask", { ...where, question: ta.value, rev: S.st.rev }); notice("Your question is in the margin. When you're ready, tell your agent: “check my asks”.", 7000); }
       S.popDraft = null;
       saveWork(true, "pop|");
       closePop();
@@ -850,7 +896,7 @@ function queue() {
   const st = S.st, open = st.threads.filter(t => t.status === "open");
   const outside = [...$$(".row[data-q]", $("#files")), ...$$(".card.orphan.open, .card.draft, .card.ask", margin)];
   const marks = open.map(t => $(`mark.scrv-hl[data-t="${t.id}"]`, doc) || t._mark).filter(Boolean);
-  const changes = st.mode === "author"
+  const changes = st.mode === "author" || st.mode === "signoff"
     ? $$("[data-c][tabindex]", doc)
     : $$(".scrv-del, .scrv-ins, .scrv-old, .scrv-ins-block", doc);
   const inText = [...new Set([...marks, ...changes])]
@@ -876,7 +922,7 @@ $("#help").onclick = () => $("#helpbox").showModal();
 // ------------------------------------------------------------------ items list
 
 const KINDS = { change: "Changes", comment: "Comments", draft: "Drafts", ask: "Asks", lost: "Lost" };
-const Q = { open: false, kind: "all" };
+const Q = { open: false, kind: "all", contest: null };
 try { Q.done = localStorage.getItem("scrivmark-qdone") === "on"; } catch { Q.done = false; }
 
 function sectionOf(node, heads) {
@@ -900,7 +946,8 @@ function items() {
     const lost = !t.line;
     out.push({ kind: lost && t.status === "open" ? "lost" : "comment", id: t.id, done: t.status === "resolved",
       label: short(t.messages[0].body), quote: short(t.current ?? t.anchor.exact, 60), at: where(t),
-      node: t._mark, go: () => setActive(t.id), state: lost ? "lost its place" : t.status });
+      node: t._mark, go: () => setActive(t.id), new: !!t.new,
+      state: lost ? "lost its place" : t.status === "resolved" && t.resolved_by ? `resolved by ${byline(t.resolved_by.by, t.resolved_by.agent)}` : t.status });
   }
   for (const d of st.drafts) {
     out.push({ kind: d.line ? "draft" : "lost", id: d.id, done: false,
@@ -911,15 +958,18 @@ function items() {
     out.push({ kind: "ask", id: a.id, done: !!a.done, label: short(a.question), quote: short(a.current ?? a.anchor.exact, 60),
       at: where(a), node: a._mark, go: () => setActive(a.id), state: a.answer ? "answered" : "waiting" });
   }
-  if (st.mode === "author" || st.mode === "closed") {
+  if (st.changes.length) {
     for (const c of st.changes) {
-      const node = $(`[data-c~="${c.id}"]`, doc) || $(`.row[data-q="${c.id}"]`);
-      out.push({ kind: "change", id: c.id, done: c.state !== "pending", at: c.file,
+      const node = $(`[data-c~="${c.id}"]`, doc) || (c.line && findBlock(c.file, c.line)) || $(`.row[data-q="${c.id}"]`);
+      const decided = c.state === "accepted" || c.state === "rejected";
+      out.push({ kind: "change", id: c.id, done: c.state !== "pending" && !(st.mode === "signoff" && decided), at: c.line ? `${c.file}:${c.line}` : c.file,
+        new: !!c.new, change: c, because: decided || c.because ? decisionLine(c) : null,
+        contest: st.mode === "signoff" && decided ? true : null, shown: st.rev,
         label: c.type === "file" ? `${c.file}: ${c.reviewer}` : `${short(c.base, 40) || "(nothing)"} → ${short(c.reviewer, 40) || "(removed)"}`,
         node, go: () => node && (node.scrollIntoView({ block: "center", behavior: "smooth" }), node.focus?.({ preventScroll: true })),
-        state: c.state });
+        state: c.state === "pending" && c.contested && c.contested.length ? "contested" : c.state });
     }
-  } else if (st.mode === "reviewer") {
+  } else if (st.mode === "reviewer" || st.mode === "waiting") {
     const marks = $$(".scrv-del, .scrv-ins, .scrv-old, .scrv-ins-block", doc);
     for (let i = 0; i < marks.length; i++) {
       const m = marks[i], next = marks[i + 1];
@@ -946,11 +996,14 @@ function items() {
 function drawQueue() {
   if (!Q.open || !S.st) return;
   const all = items(), shown = all.filter(it => Q.done || !it.done);
-  const count = k => shown.filter(it => k === "all" || it.kind === k).length;
-  $("#qfilters").replaceChildren(...["all", ...Object.keys(KINDS)].filter(k => k === "all" || all.some(it => it.kind === k)).map(k =>
+  const match = (it, k) => k === "all" || (k === "new" ? it.new : it.kind === k);
+  const count = k => shown.filter(it => match(it, k)).length;
+  const kinds = ["all", ...Object.keys(KINDS), "new"].filter(k => k === "all" || all.some(it => match(it, k)));
+  if (!kinds.includes(Q.kind)) Q.kind = "all";
+  $("#qfilters").replaceChildren(...kinds.map(k =>
     el("button", { class: `chip${Q.kind === k ? " on" : ""}`, "aria-pressed": String(Q.kind === k),
-      onclick: () => { Q.kind = k; drawQueue(); } }, `${k === "all" ? "All" : KINDS[k]} ${count(k)}`)));
-  const list = shown.filter(it => Q.kind === "all" || it.kind === Q.kind);
+      onclick: () => { Q.kind = k; drawQueue(); } }, `${k === "all" ? "All" : k === "new" ? "New" : KINDS[k]} ${count(k)}`)));
+  const list = shown.filter(it => match(it, Q.kind));
   let section = null;
   const rows = [];
   for (const it of list) {
@@ -961,11 +1014,36 @@ function drawQueue() {
     rows.push(el("li", { class: `qitem ${it.kind}${it.done ? " done" : ""}` },
       el("button", { onclick: () => it.go(), title: it.at },
         el("span", { class: "qkind" }, KINDS[it.kind].replace(/s$/, "")),
-        el("span", { class: "qlabel" }, it.label || it.quote),
+        el("span", { class: "qlabel" }, it.new ? newTag() : null, it.label || it.quote),
         it.quote && it.label !== it.quote ? el("span", { class: "qquote" }, `“${it.quote}”`) : null,
-        el("span", { class: "qmeta" }, `${it.state} · ${it.at}`))));
+        el("span", { class: "qmeta" }, `${it.state} · ${it.at}`)),
+      it.because || (it.change && it.change.contested && it.change.contested.length)
+        ? el("div", { class: "qextra" }, it.because ? el("div", { class: "muted small" }, it.because) : null, ...contestLines(it.change)) : null,
+      it.contest ? contestRow(it) : null));
   }
   $("#qlist").replaceChildren(...(rows.length ? rows : [el("li", { class: "muted small" }, "Nothing here.")]));
+}
+
+function contestRow(it) {
+  if (!Q.contest || Q.contest.id !== it.id) {
+    return el("div", { class: "qextra" }, el("button", { class: "small", onclick: () => { Q.contest = { id: it.id, text: "" }; drawQueue(); } }, "Contest…"));
+  }
+  const why = el("input", { type: "text", class: "reason", placeholder: "Why should the authors reconsider?", "aria-label": "Reason for contesting" });
+  why.value = Q.contest.text;
+  why.addEventListener("input", () => { Q.contest.text = why.value; });
+  const send = async () => {
+    if (!why.value.trim()) { notice("Say why the decision should be reconsidered.", 5000); return; }
+    try {
+      await api("/api/contest", { change: it.id, because: why.value.trim(), rev: it.shown });
+      Q.contest = null;
+      notice(`${it.id} is back with the authors.`, 6000);
+    } catch (e) { fail(e); }
+  };
+  why.addEventListener("keydown", e => { if (e.key === "Enter") send(); if (e.key === "Escape") { e.stopPropagation(); Q.contest = null; drawQueue(); } });
+  setTimeout(() => why.focus(), 0);
+  return el("div", { class: "qextra contesting" }, why, el("div", { class: "acts" },
+    el("button", { class: "primary small", onclick: send }, "Send back"),
+    el("button", { class: "small", onclick: () => { Q.contest = null; drawQueue(); } }, "Cancel")));
 }
 
 function toggleQueue(open = !Q.open) {
@@ -978,14 +1056,15 @@ function toggleQueue(open = !Q.open) {
 
 async function queueStatus() {
   const box = $("#qstatus");
-  if (!S.st || !S.st.round || S.st.mode === "closed" || S.st.mode === "read") { box.hidden = true; return; }
+  if (!S.st || !S.st.round || S.st.mode === "closed" || S.st.mode === "read" || S.st.mode === "waiting") { box.hidden = true; return; }
   try {
     const p = await api("/api/preflight", undefined, "Checking the round…");
     const what = p.transition === "return" ? "return" : "close";
     box.hidden = false;
     box.replaceChildren(p.ready
       ? el("span", {}, `✓ Ready to ${what}.`)
-      : el("span", {}, `Not ready to ${what}: `, ...(p.blockers || []).map((b, i) => el("span", {}, (i ? "; " : "") + (b.text || b)))));
+      : el("span", {}, `Not ready to ${what}: `, ...(p.blockers || []).map((b, i) => el("span", {}, (i ? "; " : "") + (b.text || b)))),
+      ...(p.notes || []).map(n => el("div", {}, n.text || n)));
   } catch { box.hidden = true; }
 }
 

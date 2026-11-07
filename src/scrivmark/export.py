@@ -48,6 +48,11 @@ def _live(rv: Review) -> bool:
     return rv.status != "closed" and gitutil.current_branch(rv.root) == f"{BRANCH_PREFIX}{rv.id}"
 
 
+def _who(x: dict) -> str:
+    """Initials, with the agent that acted for that side when recorded."""
+    return esc(x.get("by") or "?") + (f" · {esc(x['agent'])}" if x.get("agent") else "")
+
+
 def _person(p: dict | None) -> str:
     return f"{p['name']} ({p['initials']})" if p else "not yet opened by the author"
 
@@ -64,9 +69,13 @@ def _change_row(rv: Review, c: dict, live: bool) -> str:
         old, new = _short(c["base"], CELL), _short(c["reviewer"], CELL)
         what = ((f"~~{esc(old)}~~" if old else "(inserted)") + " → " + (esc(new) if new else "(deleted)"))
     if c["decision"]:
-        state = f"{c['decision']} by {esc(c['by'] or '?')} on {_day(c['at'])}"
+        state = f"{c['decision']} by {_who(c)} on {_day(c['at'])}"
+        if c.get("because"):
+            state += f": {esc(_short(c['because'], CELL))}"
     else:
         state = change_status(rv, c) if live else "pending"
+    for k in c.get("contested", []):
+        state += f"<br>(was {k['was']['decision']}; contested by {_who(k)}: {esc(_short(k['because'], CELL))})"
     return f"| {c['id']} | {where} | {what} | {state} |"
 
 
@@ -93,12 +102,14 @@ def _thread_blocks(rv: Review, live: bool) -> list[tuple[tuple, list[str]]]:
             lines += ["*The passage was deleted. It read:*", ""]
         lines += _quote(_short(passage, QUOTE)) if passage else ["> (a point in the text)"]
         for m in t["messages"]:
-            meta = f"**{esc(m['by'])}**, {_day(m['at'])}"
+            meta = f"**{_who(m)}**, {_day(m['at'])}"
             if m.get("edited_at"):
                 meta += " (edited)"
             if m.get("drafted_by"):
                 meta += f" (drafted by {esc(m['drafted_by'])})"
             lines += ["", meta, ""] + _quote(m["body"])
+        if t.get("resolved_by"):
+            lines += ["", f"*Resolved by {_who(t['resolved_by'])}, {_day(t['resolved_by']['at'])}.*"]
         blocks.append(((order.get(a["file"], len(order)), pos), lines))
     return sorted(blocks, key=lambda b: b[0])
 
@@ -113,6 +124,12 @@ def markdown(rv: Review) -> str:
             ("Author branch", f"`{rnd['author_branch']}`"), ("Started from", f"`{rnd['base'][:10]}`")]
     if rnd.get("returned"):
         meta.append(("Returned", f"{_day(rnd.get('returned_at'))} at `{rnd['returned'][:10]}`"))
+    turns = {"returned": "with the authors", "responded": "with the reviewer, signing off"}
+    if rv.status in turns:
+        meta.append(("Turn", turns[rv.status]))
+    hs = rnd.get("handovers") or []
+    if len(hs) > 1:
+        meta.append(("Handovers", "; ".join(f"to the {h['to']} by {_who(h)} on {_day(h['at'])}" for h in hs)))
     if rnd.get("closed"):
         meta.append(("Closed", _day(rnd["closed"])))
     meta.append(("Files", ", ".join(f"`{f}`" for f in rv.ms.files)))
@@ -148,7 +165,7 @@ def markdown(rv: Review) -> str:
             out += ["", "**Answer**", ""] + _quote(a["answer"]) + [""]
 
     pending = [c["id"] for c in cs if not c["decision"] and (change_status(rv, c) == "pending" if live else True)]
-    pending = pending if rv.status == "returned" else []
+    pending = pending if rv.status in ("returned", "responded") else []
     open_threads = [t["id"] for t in rec["threads"] if t["status"] == "open"] if rv.status != "closed" else []
     left = [d["id"] for d in drafts(rv)] if rv.status == "open" and live else []
     out += ["## Outstanding", ""]

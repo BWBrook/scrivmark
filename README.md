@@ -1,6 +1,6 @@
 # scrivmark
 
-> **Status:** beta (version 0.5), developed in the open and used on real
+> **Status:** beta (version 0.6), developed in the open and used on real
 > manuscripts. Try the tutorial first, and please report rough edges.
 
 **Track changes and comments for manuscripts written in Markdown, Quarto or
@@ -42,9 +42,10 @@ repository.
   undo a decision if you change your mind. Rejecting restores the original
   text, and refuses rather than guesses if the text around it has moved.
 - **Reply to and resolve comments**, and edit the text freely: your own edits
-  need no decision.
-- **Close the round** when every change is decided and every comment settled.
-  scrivmark merges the review and keeps the full record.
+  need no decision. Give a reason with a decision if you like.
+- **Close the round** when every change is decided and every comment settled,
+  or **hand it back** for the reviewer to sign off. scrivmark merges the review
+  and keeps the full record.
 
 **For both**
 
@@ -113,10 +114,36 @@ scrivmark skill --install
 | Reviewer | `scrivmark return` | Hands the review back: commits the edits and comments, pushes the branch and opens a pull request on GitHub. |
 | Author | `scrivmark open <round>` | Checks out the round, in the same viewer: accept, reject, reply, resolve, edit. |
 | Author | `scrivmark close` | Merges the round into the author's branch, keeping the record. |
+| Author | `scrivmark respond` | Or, instead of closing: hands the round back to the reviewer to sign off, once every change is decided. |
+| Reviewer | `scrivmark contest`, `close` or `return` | Signing off: answer replies, reopen threads, contest a decision with a reason, then close the round or send it back to the authors. |
 
 `scrivmark return --dry-run` and `close --dry-run` say what each step would do
 and what still stands in the way, changing nothing. Authors can ask for a
 review with `scrivmark request`. `scrivmark --help` lists every command.
+
+## When the authors are AI agents
+
+scrivmark also works the other way round: agents wrote the manuscript, and
+you review it as their supervisor or colleague. You read, edit and comment in
+the viewer as usual; the agents work from the command line, where every
+change and comment is structured data.
+
+1. Ask the agents to set it up: `scrivmark init`, commit, and keep the
+   manuscript text still while you review (code and analysis can carry on).
+2. Review from your own clone: `scrivmark start`, `serve`, then `return`.
+3. The agents open the round as the authors (`scrivmark open <round> --as
+   "Claude and Codex"`), each naming itself (`SCRIVMARK_AGENT=Codex`). They
+   decide each change on its merits, giving reasons for rejections, reply to
+   every comment, and hand the round back with `scrivmark respond`.
+4. You sign off: see what is new, answer, contest any decision you disagree
+   with, then `close`, or `return` it for another turn.
+
+![Signing off on a round two agents responded to: their decisions with reasons, replies, and what is new, in the Items panel](docs/img/signoff.png)
+
+The record shows which agent did what, and why each edit was accepted or
+rejected. While the round is with the agents, your viewer is read-only. The
+agent guide (`scrivmark skill --install`) tells agents how to act as
+authors.
 
 ## See a finished round
 

@@ -34,7 +34,12 @@ SCHEMA = {
                 "returned_at": {"type": "string"},
                 "integrated": {"type": ["string", "null"]},
                 "closed": {"type": ["string", "null"]},
-                "status": {"enum": ["open", "returned", "closed"]},
+                "status": {"enum": ["open", "returned", "responded", "closed"]},
+                "responded_at": {"type": "string"},
+                "handovers": {"type": "array", "items": {
+                    "type": "object", "required": ["to", "at"],
+                    "properties": {"to": {"enum": ["author", "reviewer"]}, "at": {"type": "string"},
+                                   "by": {"type": "string"}, "agent": {"type": "string"}}}},
                 "statement": {"type": "string"},
                 "forced": {"type": "boolean"},
             },
@@ -56,6 +61,13 @@ SCHEMA = {
                     "decision": {"enum": [None, "accepted", "rejected", "superseded"]},
                     "by": {"type": ["string", "null"]},
                     "at": {"type": ["string", "null"]},
+                    "because": {"type": "string"},
+                    "agent": {"type": "string"},
+                    "contested": {"type": "array", "items": {
+                        "type": "object", "required": ["by", "at", "because", "was"],
+                        "properties": {"by": {"type": "string"}, "at": {"type": "string"},
+                                       "because": {"type": "string"}, "was": {"type": "object"},
+                                       "agent": {"type": "string"}}}},
                 },
             },
         },
@@ -67,6 +79,9 @@ SCHEMA = {
                 "properties": {
                     "id": {"type": "string"},
                     "status": {"enum": ["open", "resolved"]},
+                    "resolved_by": {"type": "object", "required": ["by", "at"],
+                                    "properties": {"by": {"type": "string"}, "at": {"type": "string"},
+                                                   "agent": {"type": "string"}}},
                     "anchor": {
                         "type": "object",
                         "required": ["file", "rev", "range", "exact", "prefix", "suffix"],
@@ -92,6 +107,7 @@ SCHEMA = {
                                 "body": {"type": "string"},
                                 "imported_at": {"type": "string"},
                                 "edited_at": {"type": "string"},
+                                "agent": {"type": "string"},
                                 "drafted_by": {"type": "string"},
                                 "draft_history": {"type": "array", "items": {"type": "object", "properties": {
                     "body": {"type": "string"}, "wording": {"type": ["string", "null"]}, "at": {"type": "string"},
@@ -137,7 +153,7 @@ SCHEMA = {
 
 
 def now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 def new_id(prefix: str) -> str:

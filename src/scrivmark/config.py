@@ -152,13 +152,34 @@ class Identity:
 
 
 def initials_of(name: str) -> str:
-    parts = [p for p in re.split(r"[\s.]+", name) if p]
+    parts = [p for p in re.split(r"[\s.]+", name) if p and p.lower() not in ("and", "&")]
     return "".join(p[0] for p in parts).upper() or "ME"
 
 
-def identity() -> Identity:
+AS_FILE = Path(".scrivmark") / "_" / "as.json"
+
+
+def acting_as(root: Path, name: str | None) -> None:
+    """Remember (or, with None, forget) who you are in this clone, as set by
+    `scrivmark open --as`; the viewer and later commands here use it."""
+    p = root / AS_FILE
+    if name is None:
+        p.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"name": name}))
+
+
+def identity(root: Path | None = None) -> Identity:
     if name := os.environ.get("SCRIVMARK_AS"):
         return Identity(name, initials_of(name))
+    if root is not None and (root / AS_FILE).exists():
+        try:
+            name = json.loads((root / AS_FILE).read_text()).get("name")
+        except (OSError, ValueError):
+            name = None
+        if name:
+            return Identity(name, initials_of(name))
     if IDENTITY.exists():
         try:
             data = tomllib.loads(IDENTITY.read_text()).get("identity", {})

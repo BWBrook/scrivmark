@@ -55,15 +55,16 @@ def _preview(command: str, pf: dict, as_json: bool) -> None:
     if pf["transition"] != command:
         hint = {"return": "`scrivmark return --dry-run` previews the next step",
                 "close": "`scrivmark close --dry-run` previews the next step",
+                "respond": "`scrivmark respond --dry-run` previews the next step",
                 None: "nothing is left to do"}[pf["transition"]]
         raise ScrivError(f"Round {pf['round']} is {pf['status']}, so `scrivmark {command}` does not apply; {hint}.")
     lines = [f"Round {pf['round']}: preview of `scrivmark {command}` (nothing is changed)"]
     lines += [f"  {'✓' if c['ok'] else '✗'} {c['text']}" for c in pf["checks"]]
-    if command == "return":
+    if command == "return" and "files" in pf:
         lines.append(f"  Edits in {len(pf['files'])} file(s): {', '.join(pf['files']) or 'none'}; "
                      f"{pf['changes']} tracked change(s), {pf['threads']} comment thread(s)")
         lines.append(f"  Statement: {pf['statement']}")
-    else:
+    elif command == "close":
         d = pf["decisions"]
         lines.append(f"  Decided: {d['accepted']} accepted, {d['rejected']} rejected, {d['superseded']} superseded")
     lines += [f"  Note: {n}" for n in pf["notes"]]
@@ -74,17 +75,30 @@ def _preview(command: str, pf: dict, as_json: bool) -> None:
 
 
 def _who(rv: review.Review) -> str:
+    """The side whose turn it is acts: the reviewer while the round is open or
+    being signed off, the authors while it is returned."""
     rnd = rv.rec["round"]
-    if rnd["status"] == "open":
+    if review.acting(rv.rec) == "reviewer":
         return rnd["reviewer"]["initials"]
     return (rnd["author"] or {"initials": config.identity().initials})["initials"]
+
+
+By = Annotated[Optional[str], typer.Option("--by", help="The agent acting, e.g. 'Codex' or 'Claude (Opus 5.5)'. "
+                                            "Default: $SCRIVMARK_AGENT. Recorded beside the side's initials.")]
+
+
+def _agent(by: str | None) -> str | None:
+    return by or os.environ.get("SCRIVMARK_AGENT") or None
 
 
 def main() -> None:
     try:
         app()
     except ScrivError as e:
-        typer.secho(str(e), fg="red", err=True)
+        if "--json" in sys.argv:
+            typer.echo(json.dumps({"error": str(e), "kind": type(e).__name__}, ensure_ascii=False))
+        else:
+            typer.secho(str(e), fg="red", err=True)
         sys.exit(1)
 
 
@@ -273,11 +287,15 @@ def request(reviewer: Annotated[str, typer.Option(help="Reviewer's name.")],
 def return_(push: Annotated[bool, typer.Option(help="Push the round to origin if there is one.")] = True,
             statement: Annotated[Optional[str], typer.Option(
                 help="Restate how this review was done (replaces the one set at start).")] = None,
-            dry_run: DryRun = False, as_json: Json = False):
-    """Hand the review back to the author (reviewer)."""
+            by: By = None, dry_run: DryRun = False, as_json: Json = False):
+    """Hand the review back to the author (reviewer). After the authors have
+    responded, send the round back to them for another turn."""
     if dry_run:
-        _preview("return", rounds.preflight(_root(), statement=statement, push=push), as_json)
-    info = rounds.return_round(_root(), push, statement)
+        _preview("return", rounds.preflight(_root(), statement=statement, push=push, step="return"), as_json)
+    info = rounds.return_round(_root(), push, statement, _agent(by))
+    if info.get("to") == "author":
+        _emit(info, as_json, _handover_text(info))
+        return
     msg = f"Returned round {info['round']}: {info['changes']} changes, {info['threads']} comments."
     if info["orphans"]:
         msg += f"\nWarning: {len(info['orphans'])} comment(s) lost their passage: {', '.join(info['orphans'])}"
@@ -291,6 +309,66 @@ def return_(push: Annotated[bool, typer.Option(help="Push the round to origin if
     _emit(info, as_json, msg)
 
 
+def _handover_text(info: dict) -> str:
+    d = info["decided"]
+    if info["to"] == "reviewer":
+        msg = (f"Round {info['round']} is back with the reviewer to sign off: {d['accepted']} accepted, "
+               f"{d['rejected']} rejected, {d['superseded']} superseded; {len(info['open_threads'])} comment thread(s) open"
+               + (f" ({', '.join(info['open_threads'])})" if info["open_threads"] else "") + ".")
+    else:
+        msg = (f"Round {info['round']} is back with the authors: {len(info['pending'])} change(s) to decide again, "
+               f"{len(info['open_threads'])} comment thread(s) open.")
+    msg += "\nPushed to origin." if info["pushed"] else "\nNot pushed (no remote, or --no-push)."
+    return msg + ("\nNoted on the pull request." if info.get("pr") else "")
+
+
+@app.command()
+def respond(push: Annotated[bool, typer.Option(help="Push the round to origin if there is one.")] = True,
+            by: By = None, dry_run: DryRun = False, as_json: Json = False):
+    """Hand the round back to the reviewer to sign off (authors). Every change
+    must be decided; threads you disagree on can stay open."""
+    if dry_run:
+        _preview("respond", rounds.preflight(_root(), push=push, step="respond"), as_json)
+    info = rounds.respond(_root(), push, _agent(by))
+    _emit(info, as_json, _handover_text(info))
+
+
+@app.command()
+def contest(change_id: str, because: Annotated[str, typer.Option("--because", help="Why the authors should reconsider.")],
+            by: By = None, expect: Expect = None, as_json: Json = False):
+    """Send a decision back to the authors to reconsider (reviewer, signing
+    off). A rejected edit is put back; the change is undecided again."""
+    rv = review.active(_root())
+    c = review.contest(rv, change_id, _who(rv), because, expect, _agent(by))
+    _emit(c, as_json, f"{c['id']} is undecided again, with your reason. Send the round back with `scrivmark return`.")
+
+
+@app.command()
+def news(as_json: Json = False):
+    """What the other side did in its last turn: replies, new comments,
+    decisions and their reasons, resolved threads, contested decisions."""
+    rv = review.active(_root())
+    n = review.news(rv)
+    if n["until"] is None:
+        _emit(n, as_json, "Nothing has changed hands yet in this round.")
+        return
+    lines = [f"Since the round last changed hands ({n['until']}), it is the {n['turn']}'s turn. "
+             f"The other side's last turn:"]
+    who = lambda x: x["by"] + (f" · {x['agent']}" if x.get("agent") else "")  # noqa: E731
+    for d in n["decisions"]:
+        lines.append(f"  {d['change']} {d['decision']} by {who(d)}" + (f": {d['because']}" if d.get("because") else ""))
+    for k in n["contested"]:
+        lines.append(f"  {k['change']} contested by {who(k)}: {k['because']}")
+    for m in n["messages"]:
+        lines.append(f"  {'new comment' if m['new_thread'] else 'reply'} on {m['thread']} (“{_short(m['quote'], 40)}”) "
+                     f"by {who(m)}: {_short(m['body'], 120)}")
+    for r in n["resolved"]:
+        lines.append(f"  {r['thread']} resolved by {who(r)}")
+    if len(lines) == 1:
+        lines.append("  nothing")
+    _emit(n, as_json, "\n".join(lines))
+
+
 @app.command("open")
 def open_(round_id: Annotated[str, typer.Argument(help="Round id, e.g. 2026-11-03-bwb.")],
           as_: Annotated[Optional[str], typer.Option("--as", help="Your name, if not your usual identity.")] = None,
@@ -299,8 +377,14 @@ def open_(round_id: Annotated[str, typer.Argument(help="Round id, e.g. 2026-11-0
     root = _root()
     if as_:
         os.environ["SCRIVMARK_AS"] = as_
+        config.acting_as(root, as_)
     info = rounds.open_round(root, round_id)
-    msg = f"Round {info['round']} is {info['status']}."
+    rnd = review.active(root).rec["round"]
+    side = {"open": "the reviewer reviews", "returned": "the authors respond",
+            "responded": "the reviewer signs off", "closed": "closed"}[info["status"]]
+    msg = (f"Opened round {info['round']} ({info['status']}: {side})"
+           + (f", as the authors ({rnd['author']['name']})" if info["status"] == "returned" and rnd.get("author") else "")
+           + ".")
     if info["merged"]:
         msg += "\nBrought in newer work from the author branch."
     if info["invalidated"]:
@@ -343,7 +427,10 @@ def status(as_json: Json = False):
     rv = review.active(_root())
     s = review.summary(rv)
     r, c, t = s["round"], s["changes"], s["threads"]
-    human = (f"Round {r['id']} ({r['status']}), reviewer {r['reviewer']['name']}\n"
+    turn = {"open": "the reviewer reviews", "returned": "the authors respond",
+            "responded": "the reviewer signs off", "closed": "closed"}[r["status"]]
+    human = (f"Round {r['id']} ({r['status']}: {turn}), reviewer {r['reviewer']['name']}"
+             + (f", authors {r['author']['name']}" if r.get("author") else "") + "\n"
              f"Changes: {c['pending']} pending, {c['accepted']} accepted, {c['rejected']} rejected, {c['superseded']} superseded\n"
              f"Comments: {t['open']} open, {t['resolved']} resolved, {t['orphaned']} orphaned\n"
              f"Drafts: {s['drafts']}\nRevision: {s['rev']}"
@@ -386,11 +473,14 @@ def _short(s: str, n: int = 60) -> str:
 All = Annotated[bool, typer.Option("--all", help="Every change still pending.")]
 
 
+Because = Annotated[Optional[str], typer.Option("--because", help="The reason, kept with the decision.")]
+
+
 @app.command()
 def accept(change_ids: Annotated[Optional[list[str]], typer.Argument()] = None, all_: All = False,
-           expect: Expect = None, as_json: Json = False):
+           because: Because = None, by: By = None, expect: Expect = None, as_json: Json = False):
     """Accept changes (author)."""
-    _decide(change_ids or [], all_, "accepted", expect, as_json)
+    _decide(change_ids or [], all_, "accepted", expect, as_json, because, _agent(by))
 
 
 @app.command()
@@ -403,12 +493,14 @@ def undo(change_id: str, expect: Expect = None, as_json: Json = False):
 
 @app.command()
 def reject(change_ids: Annotated[Optional[list[str]], typer.Argument()] = None, all_: All = False,
-           expect: Expect = None, as_json: Json = False):
-    """Reject changes, restoring your original text (author)."""
-    _decide(change_ids or [], all_, "rejected", expect, as_json)
+           because: Because = None, by: By = None, expect: Expect = None, as_json: Json = False):
+    """Reject changes, restoring your original text (author). Give the reason
+    with --because; it is kept with the decision."""
+    _decide(change_ids or [], all_, "rejected", expect, as_json, because, _agent(by))
 
 
-def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_json: bool) -> None:
+def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_json: bool,
+            because: str | None = None, agent: str | None = None) -> None:
     rv = review.active(_root())
     states = {c["id"]: c["state"] for c in review.changes(rv)}
     if all_:
@@ -421,7 +513,7 @@ def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_js
     done = []
     for i, cid in enumerate(ids):
         try:
-            done.append(review.decide(rv, cid, decision, _who(rv), expect if i == 0 else None))
+            done.append(review.decide(rv, cid, decision, _who(rv), expect if i == 0 else None, because, agent))
         except ScrivError as e:
             if not done:
                 raise
@@ -430,7 +522,9 @@ def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_js
             _emit(out, as_json, f"{decision.capitalize()} {len(done)}: {', '.join(out['done'])}. Stopped at {cid}: {e}"
                   + (f"\nNot attempted: {', '.join(out['remaining'])}" if out["remaining"] else ""))
             raise typer.Exit(1) from None
-    _emit(done, as_json, "\n".join(f"{c['id']} {decision}" for c in done))
+    _emit(done, as_json, "\n".join(f"{c['id']} {c['decision'] or 'superseded; reason recorded'}"
+                                    + (" (your original text is back in the file)" if c["decision"] == "rejected" else "")
+                                    for c in done))
 
 
 # ------------------------------------------------------------------ comments
@@ -507,7 +601,8 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
                 errors.append({"item": n, "file": d["file"], "quote": d.get("quote"), "error": str(e)})
                 continue
             items.append({"anchor": anchor, "body": d.get("body") or "", "draft": is_draft, "wording": d.get("wording"),
-                          **({"by": d.get("by") or by or os.environ.get("SCRIVMARK_AGENT")} if is_draft else {})})
+                          **({"by": d.get("by") or by or os.environ.get("SCRIVMARK_AGENT")} if is_draft
+                             else {"agent": d.get("by") or _agent(by)})})
         if dry_run:
             checked = review.preflight(rv, items)
             report = {"ok": not errors, "items": len(data), "errors": errors, "checked": checked,
@@ -549,7 +644,7 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
     else:
         if wording is not None:
             raise ScrivError("--wording applies to drafts; to change the text, edit the file.")
-        t = review.comment(rv, anchor, body, _who(rv), expect)
+        t = review.comment(rv, anchor, body, _who(rv), expect, _agent(by))
         _emit(t, as_json, f"Comment {t['id']} added.")
 
 
@@ -613,26 +708,28 @@ def reattach(thread_id: str, file: str,
 
 
 @app.command()
-def reply(thread_id: str, body: Annotated[str, typer.Option()], expect: Expect = None, as_json: Json = False):
+def reply(thread_id: str, body: Annotated[str, typer.Option()], by: By = None, expect: Expect = None,
+          as_json: Json = False):
     """Reply to a thread."""
     rv = review.active(_root())
-    t = review.reply(rv, thread_id, body, _who(rv), expect)
+    t = review.reply(rv, thread_id, body, _who(rv), expect, _agent(by))
     _emit(t, as_json, f"Replied on {t['id']}.")
 
 
 @app.command()
-def resolve(thread_ids: list[str], expect: Expect = None, as_json: Json = False):
+def resolve(thread_ids: list[str], by: By = None, expect: Expect = None, as_json: Json = False):
     """Mark threads resolved."""
     rv = review.active(_root())
-    done = [review.set_thread(rv, tid, "resolved", expect if i == 0 else None) for i, tid in enumerate(thread_ids)]
+    done = [review.set_thread(rv, tid, "resolved", expect if i == 0 else None, _who(rv), _agent(by))
+            for i, tid in enumerate(thread_ids)]
     _emit(done, as_json, "\n".join(f"{t['id']} resolved" for t in done))
 
 
 @app.command()
-def reopen(thread_id: str, as_json: Json = False):
+def reopen(thread_id: str, by: By = None, as_json: Json = False):
     """Reopen a resolved thread."""
     rv = review.active(_root())
-    t = review.set_thread(rv, thread_id, "open")
+    t = review.set_thread(rv, thread_id, "open", None, _who(rv), _agent(by))
     _emit(t, as_json, f"{t['id']} reopened")
 
 

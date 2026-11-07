@@ -69,12 +69,61 @@ class Review:
         self.rec = record.load(self.root, self.id)
 
 
-LIVE = ("open", "returned")
+LIVE = ("open", "returned", "responded")
 OPEN = ("open",)
 RETURNED = ("returned",)
+RESPONDED = ("responded",)
+
+
+def acting(rec: dict) -> str | None:
+    """Whose turn it is: the reviewer while the round is open or the authors
+    have responded, the authors while it is returned. The phase decides the
+    role, not the git identity: agents often run as their human's account."""
+    return {"open": "reviewer", "responded": "reviewer", "returned": "author"}.get(rec["round"]["status"])
+
+
+def handovers(rec: dict) -> list[dict]:
+    """Each time the round changed hands after the review: to the authors at
+    return, back to the reviewer at each response, and so on."""
+    rnd = rec["round"]
+    if "handovers" in rnd:
+        return rnd["handovers"]
+    return [{"to": "author", "at": rnd["returned_at"]}] if rnd.get("returned_at") else []
+
+
+def news_window(rec: dict) -> tuple[str | None, str | None]:
+    """The other side's last turn, [start, end): what is new to whoever's turn
+    it is now. The whole review is new to the authors at the first return."""
+    hs = handovers(rec)
+    if not hs:
+        return None, None
+    return (hs[-2]["at"] if len(hs) > 1 else None), hs[-1]["at"]
+
+
+def _ts(at: str) -> datetime:
+    """A recorded time; one with no zone (a date from a signed source comment)
+    is read as local time."""
+    t = datetime.fromisoformat(at)
+    return t if t.tzinfo else t.astimezone()
+
+
+def _within(at: str | None, window: tuple[str | None, str | None]) -> bool:
+    """In (start, end]: a turn ends at its handover, and anything recorded at
+    the same instant as a handover belongs to the turn it ended (older records
+    keep times to the second)."""
+    start, end = window
+    if not at or end is None:
+        return False
+    t = _ts(at)
+    return (start is None or t > _ts(start)) and t <= _ts(end)
+
+
+def _agent(agent: str | None) -> dict:
+    return {"agent": agent} if agent else {}
 PHASE_ERROR = {
     OPEN: "Drafts belong to the reviewer, before the round is returned.",
     RETURNED: "Only a returned round has changes to decide.",
+    RESPONDED: "That is for the reviewer, once the authors have responded (`scrivmark respond`).",
 }
 
 
@@ -247,7 +296,19 @@ def change_status(rv: Review, c: dict) -> str:
 
 
 def changes(rv: Review) -> list[dict]:
-    return [dict(c, state=change_status(rv, c)) for c in rv.rec["changes"]]
+    """Each change with its state and, for text, the sentence around it as the
+    reviewer left it, the change marked «»."""
+    out = []
+    returned = rv.rec["round"].get("returned")
+    for c in rv.rec["changes"]:
+        x = dict(c, state=change_status(rv, c))
+        if returned and c["type"] != "file" and c.get("r_range"):
+            text = gitutil.show(rv.root, returned, c["file"]) or ""
+            s, e = c["r_range"]
+            x["line"] = text.count("\n", 0, s) + 1
+            x["context"] = _context(text, s, e, None, span=70)["before"]
+        out.append(x)
+    return out
 
 
 def _find_change(rv: Review, cid: str) -> dict:
@@ -257,7 +318,8 @@ def _find_change(rv: Review, cid: str) -> dict:
     raise ScrivError(f"No change {cid} in round {rv.id}")
 
 
-def decide(rv: Review, cid: str, decision: str, who: str, expect: str | None = None) -> dict:
+def decide(rv: Review, cid: str, decision: str, who: str, expect: str | None = None,
+           because: str | None = None, agent: str | None = None) -> dict:
     if rv.status != "returned":
         raise ScrivError("Changes are decided after the reviewer returns the round.")
     with _locked(rv, expect, RETURNED) as writes:
@@ -266,10 +328,20 @@ def decide(rv: Review, cid: str, decision: str, who: str, expect: str | None = N
             raise ScrivError(f"{cid} is already {c['decision']}")
         state = change_status(rv, c)
         if state == "superseded":
-            raise Conflict(f"{cid} has been edited since the review, so it needs no decision.")
+            if because and because.strip():
+                c.update({"because": because.strip(), "by": who, "at": record.now(), **_agent(agent)})
+                writes[rv.record_rel] = record.dumps(rv.rec)
+                return c
+            raise Conflict(f"{cid} has been edited since the review, so it needs no decision. "
+                           "Add --because to record why you rewrote it.")
         if decision == "rejected":
             writes.update(_reject_writes(rv, c))
         c.update({"decision": decision, "by": who, "at": record.now()})
+        c.pop("because", None)
+        c.pop("agent", None)
+        if because and because.strip():
+            c["because"] = because.strip()
+        c.update(_agent(agent))
         writes[rv.record_rel] = record.dumps(rv.rec)
     return c
 
@@ -292,7 +364,9 @@ def _reject_writes(rv: Review, c: dict) -> dict:
             "shifted": "the text around it has been edited since the review",
             "ambiguous": "the passage is repeated, so scrivmark cannot be sure which copy is the reviewer's",
         }[t["state"]]
-        raise Conflict(f"{c['id']} was not rejected because {why}. Nothing was changed; edit the passage directly instead.")
+        raise Conflict(f"{c['id']} was not rejected because {why}. Nothing was changed. Edit the passage yourself "
+                       f"instead; the change then becomes superseded, and `scrivmark reject {c['id']} --because \"...\"` "
+                       "records your reason with it.")
     cur = rv.text(c["file"])
     s, e = t["range"]
     return {c["file"]: cur[:s] + c["base"] + cur[e:]}
@@ -307,16 +381,44 @@ def undo(rv: Review, cid: str, expect: str | None = None) -> dict:
         c = _find_change(rv, cid)
         if not c["decision"]:
             raise ScrivError(f"{cid} has no decision to undo.")
-        if c["decision"] == "rejected":
-            if c["type"] == "file":
-                raise Conflict("Undoing a whole-file rejection is not supported; restore the file with git.")
-            t = target(rv, c)
-            if t["state"] != "exact":
-                raise Conflict(f"The restored text for {cid} has been edited since, so the rejection cannot be undone safely.")
-            cur = rv.text(c["file"])
-            s, e = t["range"]
-            writes[c["file"]] = cur[:s] + c["reviewer"] + cur[e:]
-        c.update({"decision": None, "by": None, "at": None})
+        _reopen(rv, c, writes)
+        writes[rv.record_rel] = record.dumps(rv.rec)
+    return c
+
+
+def _reopen(rv: Review, c: dict, writes: dict) -> None:
+    """Make a decided change undecided again, putting the reviewer's text back
+    after a rejection (only where scrivmark's restoration is exactly in place)."""
+    if c["decision"] == "rejected":
+        if c["type"] == "file":
+            raise Conflict("Reopening a whole-file rejection is not supported; restore the file with git.")
+        t = target(rv, c)
+        if t["state"] != "exact":
+            raise Conflict(f"The restored text for {c['id']} has been edited since, so the rejection cannot be reopened safely.")
+        cur = rv.text(c["file"])
+        s, e = t["range"]
+        writes[c["file"]] = cur[:s] + c["reviewer"] + cur[e:]
+    c.update({"decision": None, "by": None, "at": None})
+    c.pop("because", None)
+    c.pop("agent", None)
+
+
+def contest(rv: Review, cid: str, who: str, because: str, expect: str | None = None,
+            agent: str | None = None) -> dict:
+    """The reviewer, signing off, sends a decision back to the authors to
+    reconsider, with a reason. The change is undecided again (a rejected edit
+    is put back) and the contest stays in its history."""
+    if not because or not because.strip():
+        raise ScrivError("Say why the decision should be reconsidered (--because).")
+    with _locked(rv, expect, RESPONDED) as writes:
+        c = _find_change(rv, cid)
+        if c["decision"] not in ("accepted", "rejected"):
+            raise ScrivError(f"{cid} has no decision to contest.")
+        was = {"decision": c["decision"], "by": c["by"], "at": c["at"],
+               **({"because": c["because"]} if c.get("because") else {}), **_agent(c.get("agent"))}
+        _reopen(rv, c, writes)
+        c.setdefault("contested", []).append({"by": who, "at": record.now(), "because": because.strip(),
+                                              "was": was, **_agent(agent)})
         writes[rv.record_rel] = record.dumps(rv.rec)
     return c
 
@@ -493,13 +595,14 @@ def threads(rv: Review) -> list[dict]:
     return [dict(t, where=resolve(rv, t["anchor"])) for t in rv.rec["threads"]]
 
 
-def comment(rv: Review, anchor: dict, body: str, who: str, expect: str | None = None) -> dict:
+def comment(rv: Review, anchor: dict, body: str, who: str, expect: str | None = None,
+            agent: str | None = None) -> dict:
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
     with _locked(rv, expect, LIVE) as writes:
         t = {
             "id": record.new_id("t"), "status": "open", "anchor": anchor,
-            "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": body}],
+            "messages": [{"id": record.new_id("m"), "by": who, "at": record.now(), "body": body, **_agent(agent)}],
         }
         rv.rec["threads"].append(t)
         writes[rv.record_rel] = record.dumps(rv.rec)
@@ -526,7 +629,7 @@ def add_many(rv: Review, items: list[dict], who: str, expect: str | None = None)
             else:
                 t = {"id": record.new_id("t"), "status": "open", "anchor": i["anchor"],
                      "messages": [{"id": record.new_id("m"), "by": i.get("by", who), "at": i.get("at") or record.now(),
-                                   "body": i["body"]}]}
+                                   "body": i["body"], **_agent(i.get("agent"))}]}
                 if i.get("at"):
                     t["messages"][0]["imported_at"] = record.now()
                 rv.rec["threads"].append(t)
@@ -563,27 +666,30 @@ def source_comments(rv: Review, importer: str) -> list[dict]:
     return out
 
 
-def reply(rv: Review, tid: str, body: str, who: str, expect: str | None = None) -> dict:
+def reply(rv: Review, tid: str, body: str, who: str, expect: str | None = None,
+          agent: str | None = None) -> dict:
     with _locked(rv, expect, LIVE) as writes:
         t = _thread(rv, tid)
-        t["messages"].append({"id": record.new_id("m"), "by": who, "at": record.now(), "body": body})
+        t["messages"].append({"id": record.new_id("m"), "by": who, "at": record.now(), "body": body, **_agent(agent)})
         t["status"] = "open"
+        t.pop("resolved_by", None)
         writes[rv.record_rel] = record.dumps(rv.rec)
     return t
 
 
 def can_edit(rv: Review, m: dict, who: str) -> bool:
     """A message can be changed by whoever wrote it until the other side has
-    seen it: the reviewer's until the round is returned, the author's (written
-    since the return) until it is closed."""
+    seen it: during the turn in which it was written, by the side whose turn
+    it is. The reviewer's first comments until the return, the authors'
+    replies until they respond or close, and so on, turn by turn."""
     rnd = rv.rec["round"]
-    if m.get("by") != who:
+    role = acting(rv.rec)
+    if role is None or m.get("by") != who:
         return False
-    if rnd["status"] == "open":
-        return True
-    if rnd["status"] == "returned" and rnd.get("returned_at") and who == (rnd["author"] or {}).get("initials"):
-        return datetime.fromisoformat(m["at"]) >= datetime.fromisoformat(rnd["returned_at"])
-    return False
+    if who != (rnd["reviewer"]["initials"] if role == "reviewer" else (rnd["author"] or {}).get("initials")):
+        return False
+    hs = handovers(rv.rec)
+    return not hs or _ts(m["at"]) > _ts(hs[-1]["at"])
 
 
 def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: str | None = None) -> dict:
@@ -598,7 +704,7 @@ def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: st
             raise ScrivError(f"No message {mid} in thread {tid}")
         if not can_edit(rv, m, who):
             raise ScrivError("Only your own messages can be edited, and only until the other side has seen them "
-                             "(the reviewer's until the round is returned, the author's until it is closed).")
+                             "(until the round next changes hands).")
         if m.get("drafted_by"):
             m.setdefault("draft_history", []).append(
                 {"body": m["body"], "at": m.get("edited_at") or m["at"], "by": who if m.get("edited_at") else m["drafted_by"]})
@@ -608,12 +714,44 @@ def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: st
     return t
 
 
-def set_thread(rv: Review, tid: str, status: str, expect: str | None = None) -> dict:
+def set_thread(rv: Review, tid: str, status: str, expect: str | None = None, who: str | None = None,
+               agent: str | None = None) -> dict:
     with _locked(rv, expect, LIVE) as writes:
         t = _thread(rv, tid)
         t["status"] = status
+        if status == "resolved" and who:
+            t["resolved_by"] = {"by": who, "at": record.now(), **_agent(agent)}
+        elif status == "open":
+            t.pop("resolved_by", None)
         writes[rv.record_rel] = record.dumps(rv.rec)
     return t
+
+
+def news(rv: Review) -> dict:
+    """What the other side did in its last turn, for whoever's turn it is."""
+    window = news_window(rv.rec)
+    out = {"turn": acting(rv.rec), "since": window[0], "until": window[1], "messages": [], "resolved": [],
+           "decisions": [], "contested": []}
+    if window[1] is None:
+        return out
+    for t in rv.rec["threads"]:
+        for m in t["messages"]:
+            if _within(m["at"], window):
+                out["messages"].append({"thread": t["id"], "message": m["id"], "by": m["by"], **_agent(m.get("agent")),
+                                        "at": m["at"], "body": m["body"], "quote": t["anchor"]["exact"],
+                                        "new_thread": m is t["messages"][0]})
+        rb = t.get("resolved_by")
+        if rb and _within(rb["at"], window):
+            out["resolved"].append({"thread": t["id"], **rb})
+    for c in rv.rec["changes"]:
+        if (c.get("decision") in ("accepted", "rejected") or c.get("because")) and _within(c.get("at"), window):
+            out["decisions"].append({"change": c["id"], "decision": c.get("decision") or "superseded",
+                                     "by": c["by"], "at": c["at"],
+                                     **({"because": c["because"]} if c.get("because") else {}), **_agent(c.get("agent"))})
+        for k in c.get("contested", []):
+            if _within(k["at"], window):
+                out["contested"].append({"change": c["id"], **k})
+    return out
 
 
 def reattach(rv: Review, tid: str, anchor: dict, expect: str | None = None) -> dict:
@@ -874,8 +1012,8 @@ def asks(rv: Review, include_done: bool = False) -> list[dict]:
     return [dict(a, where=resolve(rv, a["anchor"])) for a in items if include_done or not a.get("done")]
 
 
-def add_ask(rv: Review, anchor: dict, question: str, who: str) -> dict:
-    with _locked(rv, None, LIVE) as writes:
+def add_ask(rv: Review, anchor: dict, question: str, who: str, expect: str | None = None) -> dict:
+    with _locked(rv, expect, LIVE) as writes:
         items = read_json(_asks_path(rv), [])
         item = {"id": record.new_id("q"), "anchor": anchor, "question": question, "by": who, "answer": None,
                 "at": record.now(), "done": False}
@@ -885,8 +1023,8 @@ def add_ask(rv: Review, anchor: dict, question: str, who: str) -> dict:
 
 
 def update_ask(rv: Review, qid: str, answer: str | None = None, done: bool | None = None,
-               wording: str | None = None, by: str | None = None) -> dict:
-    with _locked(rv, None, LIVE) as writes:
+               wording: str | None = None, by: str | None = None, expect: str | None = None) -> dict:
+    with _locked(rv, expect, LIVE) as writes:
         items = read_json(_asks_path(rv), [])
         item = next((a for a in items if a["id"] == qid), None)
         if item is None:
@@ -904,7 +1042,7 @@ def apply_ask(rv: Review, qid: str, expect: str | None = None) -> dict:
     anchored to the new text, so it can still become a comment."""
     if rv.status == "closed":
         raise ScrivError("This round is closed.")
-    with _locked(rv, expect, LIVE) as writes:
+    with _locked(rv, expect, ("open", "returned")) as writes:
         items = read_json(_asks_path(rv), [])
         item = next((a for a in items if a["id"] == qid), None)
         if item is None:
@@ -940,8 +1078,9 @@ def replace_lines(rv: Review, rel: str, first: int, last: int, new_text: str, fi
         raise ScrivError(f"{rel} is not a manuscript file")
     with transaction(rv.root, file_rev, [rel]) as writes:
         rv.reload()
-        if rv.status not in LIVE:
-            raise ScrivError("This round is closed.")
+        if rv.status not in ("open", "returned"):
+            raise ScrivError("This round is closed." if rv.status == "closed" else
+                             "The text is the authors' while you sign off; comment, or contest a decision, instead.")
         writable(rv, rel)
         lines = rv.text(rel).splitlines(keepends=True)
         if not (1 <= first <= last <= len(lines)):

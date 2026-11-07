@@ -47,7 +47,11 @@ def test_server_requires_token_and_refuses_stale_edits(repo):
     edit(repo, "Bare-nosed", "Common")
     r = client.post("/api/source", json={**src, "text": "changed"})
     assert r.status_code == 409
-    r = client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows", "body": "Hm."})
+    assert client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows",
+                                              "body": "Hm."}).status_code == 409
+    rev = client.get("/api/state").json()["rev"]
+    r = client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows", "body": "Hm.",
+                                          "rev": rev})
     assert r.status_code == 200 and r.json()["anchor"]["exact"] == "dig burrows"
     assert client.get("/files/.git/HEAD").status_code == 404
 
@@ -246,7 +250,9 @@ def test_viewer_marks_and_edits_your_own_comments(repo):
     viewer = Viewer(repo)
     client = TestClient(build_app(viewer), base_url="http://127.0.0.1")
     client.cookies.set(viewer.cookie, viewer.token)
-    t = client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows", "body": "Hm."}).json()
+    rev = client.get("/api/state").json()["rev"]
+    t = client.post("/api/comment", json={"file": "paper.md", "lines": "8-13", "text": "dig burrows", "body": "Hm.",
+                                          "rev": rev}).json()
     mid = t["messages"][0]["id"]
     st = client.get("/api/state").json()
     assert st["threads"][0]["editable"] == [mid]
@@ -254,7 +260,8 @@ def test_viewer_marks_and_edits_your_own_comments(repo):
     assert r.status_code == 200
     st = client.get("/api/state").json()
     assert st["threads"][0]["messages"][0]["body"] == "Hm, why?" and st["threads"][0]["messages"][0]["edited_at"]
-    assert client.post("/api/message", json={"thread": t["id"], "message": mid, "body": " "}).status_code == 400
+    assert client.post("/api/message", json={"thread": t["id"], "message": mid, "body": " ",
+                                             "rev": st["rev"]}).status_code == 400
 
 
 def test_reading_view_and_preflight_endpoints(repo):

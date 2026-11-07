@@ -14,8 +14,9 @@ scrivmark runs manuscript review on Markdown, Quarto and LaTeX sources in git:
 - a human reads the result in a local viewer (`scrivmark serve`), often in the
   browser pane beside your chat. You work through the CLI on the same state.
 
-Always use `--json` when you need to read output. Never edit
-`reviews/*.json` or `.scrivmark/` by hand.
+Always use `--json` when you need to read output; with `--json`, a refusal
+also comes back as JSON (`{"error": ..., "kind": ...}`) with exit status 1.
+Never edit `reviews/*.json` or `.scrivmark/` by hand.
 
 This guide is loaded when your session starts. If scrivmark was upgraded since,
 `scrivmark skill` prints the current one; read it before going on.
@@ -49,11 +50,21 @@ scrivmark status --json      # round, phase, counts, revision; author is null un
 scrivmark threads --json     # comments, with anchors and where they sit now
 scrivmark changes --json     # after return: each change, its id and state
 scrivmark drafts --json      # reviewer phase: drafts awaiting triage
+scrivmark news --json        # what the other side did in its last turn
 ```
 
-The phase decides who acts. While a round is `open`, it belongs to the
-reviewer: edit, comment, draft. Once it is `returned`, it belongs to the
-author: accept, reject, reply, resolve, edit.
+The phase decides who acts, whatever the git identity (agents often run as
+their human's account). While a round is `open`, it belongs to the reviewer:
+edit, comment, draft. Once it is `returned`, it belongs to the authors:
+accept, reject, reply, resolve, edit. If the authors run `scrivmark respond`,
+it is `responded` and back with the reviewer to sign off: reply, resolve or
+reopen threads, comment, `contest` a decision, then `close` or send it back
+with `return`. It can go back and forth like this as often as needed; a
+human author can also simply `close` from `returned`.
+
+Name yourself on everything you do: set `SCRIVMARK_AGENT` (say
+`SCRIVMARK_AGENT="Codex (gpt-6.1-sol)"`) or pass `--by`. It is recorded beside
+the side's initials, so the record says which agent did what.
 
 ## Helping a reviewer
 
@@ -155,13 +166,70 @@ author: accept, reject, reply, resolve, edit.
   reports (drafts left, untracked files, comments that lost their place, how
   many changes will be recorded, where it will be pushed); it changes nothing.
 
+## Agents as the authors
+
+Sometimes the manuscript is yours: you (and perhaps another agent) wrote it,
+and the reviewer is a human supervisor or colleague. Then you are the authors,
+and you decide; nobody else will. In that case:
+
+- Open the round with the authors' name, once: `scrivmark open <round> --as
+  "Claude and Codex"` (whatever names the writing agents). Then read
+  `scrivmark news --json` (or, the first time, `changes --json` and
+  `threads --open --json`).
+- If two of you share the round, split it (say by section or by thread) and
+  each set your own `SCRIVMARK_AGENT`. Each decision, reply and resolution
+  then carries your name in its `agent` field (`changes --json`,
+  `threads --json`), so either of you can see what the other has done.
+  Coordinate between yourselves where you normally do, not in the review:
+  every thread is part of the record the reviewer reads. Writes check
+  revisions, so working at once is safe; on a `stale` refusal, re-read and
+  retry.
+- `changes --json` gives each change's `context`: the sentence as the reviewer
+  left it, with the change marked «». You need not open the file to see what
+  a small edit means.
+- Decide every change on its merits. Accept what improves the paper; reject
+  what does not, always with `--because "..."` giving the reason. Weigh the
+  reviewer's points as an equal would: argue when you disagree, and say so
+  plainly. Accepting leaves the text as the reviewer made it; rejecting puts
+  your original text back in the file. Either way you may edit the passage
+  afterwards; the decision stays recorded as made.
+- If you rewrite a passage before deciding its change (or a rejection is
+  refused because the text around it moved), the change becomes `superseded`
+  and needs no decision; `scrivmark reject <id> --because "..."` then records
+  why you rewrote it.
+- If the reviewer edited text that a script or the claims ledger generates
+  (tables, reported numbers), the edit is a request: change the generator or
+  the analysis, rebuild, and reply saying what you did.
+- Reply to every comment. Resolve a thread only when it is settled; leave a
+  disagreement open, with your argument, for the reviewer to answer.
+- You may open comments of your own (`scrivmark comment`) where you want the
+  reviewer's view: on a passage you rewrote, or a question back. They are for
+  the reviewer, stay open for them, and do not block `respond`.
+- When every change is decided, check with `scrivmark respond --dry-run
+  --json` (it lists what is undecided and which threads stay open), then hand
+  the round back: `scrivmark respond`. Do not `close` it yourself unless the
+  reviewer has said to; closing is normally theirs once they have signed off.
+- When it comes back (`scrivmark news --json` shows contested decisions and
+  new replies), answer and decide again, then `respond` again.
+
+## Helping a reviewer sign off
+
+When the authors have responded, the round is the reviewer's again
+(`responded`). `scrivmark news --json` lists what the authors did: decisions
+with reasons, replies, resolved threads. Summarise it for the reviewer. On
+their say-so: reply or reopen threads, `scrivmark contest c4 --because "..."`
+to send a decision back (a rejected edit is put back), and then `scrivmark
+close` or `scrivmark return` to send the round back to the authors. The text
+itself is the authors' during sign-off: suggest wording in a comment instead.
+
 ## Helping an author
 
 - Summarise the review: `scrivmark changes --json` and
   `scrivmark threads --open --json`.
-- Accept or reject only when the author says so:
-  `scrivmark accept c1 c3`, `scrivmark reject c2`. Rejection fails closed if
-  the text has moved; report that rather than forcing it.
+- Accept or reject only when the author says so (unless you are the authors;
+  see above):
+  `scrivmark accept c1 c3`, `scrivmark reject c2 --because "..."`. Rejection
+  fails closed if the text has moved; report that rather than forcing it.
 - Draft replies for the author to approve, then `scrivmark reply <thread>
   --body "..."` and `scrivmark resolve <thread>`.
 - Edit the source freely when asked. Changes the author edits become

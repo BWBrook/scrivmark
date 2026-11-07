@@ -132,12 +132,27 @@ either side                  reviewer (+ agent)                author (+ agent)
 start / request  ───►  open: edit, comment, triage   ───►  returned: accept,
                        drafts; live redline          return  reject, reply,
                                                              resolve, edit
-                                                                 │
-                                                               close
-                                                                 ▼
-                                                  merge commit into author
-                                                  branch; record kept
+                       responded: sign off:          ◄───        │
+                       reply, reopen, comment,      respond      │
+                       contest a decision           ───►         │
+                         │                          return       │
+                       close                                   close
+                         ▼                                       ▼
+                       merge commit into author branch; record kept
 ```
+
+The phase decides who acts, not the git identity: the reviewer while the
+round is `open` or `responded`, the authors while it is `returned`. Agents
+often run under their human's account, and the authors may themselves be
+agents, so identity cannot say whose turn it is. Each act also records the
+agent that performed it (`agent`, from `--by` or `SCRIVMARK_AGENT`) beside the
+side's initials. The viewer uses identity only to stop impersonation: a
+person whose name is the side not holding the round gets a read-only view,
+and the server refuses their writes. `open --as NAME` records who you are in
+that clone (`.scrivmark/_/as.json`), so one person can play both parts, as in
+the tutorial, or agents can act as the authors; `start` clears it. Every
+viewer write carries the page's revision, so a write made before a handover
+cannot land after it.
 
 - `start` (reviewer) or `request --reviewer <user>` (author) cuts the branch
   from the author branch and writes the record and workflow statement.
@@ -148,7 +163,18 @@ start / request  ───►  open: edit, comment, triage   ───►  retur
   metadata commit, pushes branch and tags, and opens or updates the PR.
 - `open <round>` (author): fetches and checks out the branch, starts the viewer
   in author mode.
-- `close` (author): refuses while units are undecided, threads open, or
+- `respond` (authors, optional): refuses while any change is undecided;
+  commits the authors' work, brings in the author branch, records a handover,
+  pushes, and notes it on the PR. The reviewer then signs off: replies,
+  reopens, comments, and may `contest` a decision with a reason, which makes
+  it undecided again (a rejected edit is put back) and keeps the contest in
+  the change's history. The reviewer cannot edit the text in this phase. They
+  then `close`, or `return` the round to the authors, as often as needed.
+  Each handover is recorded (`round.handovers`), and `news` lists what the
+  other side did in its last turn. Messages can be edited by their writer
+  only in the turn they were written. Times are recorded to the millisecond,
+  so acts and handovers in the same second keep their order.
+- `close` (author, or reviewer after signing off): refuses while units are undecided, threads open, or
   relocation conflicts unresolved (`--force` overrides and is recorded). It
   checks that the author branch is still at the integrated commit, writes the
   final record, and merges with a **merge commit** (never squash), so `B` and

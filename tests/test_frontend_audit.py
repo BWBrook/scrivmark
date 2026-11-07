@@ -29,7 +29,9 @@ def test_state_gives_second_occurrence_of_a_repeated_phrase(repo):
     viewer = Viewer(repo)
     c = TestClient(build_app(viewer), base_url="http://127.0.0.1")
     c.cookies.set(viewer.cookie, viewer.token)
-    r = c.post("/api/comment", json={"file": "paper.md", "lines": "3-3", "text": "rate is low", "before": "The rate is low while ", "body": "x"})
+    rev = c.get("/api/state").json()["rev"]
+    r = c.post("/api/comment", json={"file": "paper.md", "lines": "3-3", "text": "rate is low",
+                                     "before": "The rate is low while ", "body": "x", "rev": rev})
     assert r.status_code == 200
     th = c.get("/api/state").json()["threads"][0]
     assert th["hl"] == {"text": "rate is low", "nth": 1, "count": 2}

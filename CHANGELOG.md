@@ -10,7 +10,46 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
-## Unreleased
+## 0.6.0 (7 November 2026)
+
+Rounds that go back and forth, and agents as authors.
+
+- **Sign-off.** After deciding every change, the authors can hand the round
+  back with `scrivmark respond` instead of closing it. The reviewer then
+  reads their decisions and replies, answers, reopens threads, comments, and
+  can `scrivmark contest c4 --because "..."` a decision (a rejected edit is
+  put back for the authors to decide again). Then `scrivmark close`, or
+  `scrivmark return` to send it back, as often as needed. A human author can
+  still simply close from `returned`.
+- **Agents named on what they do.** `--by` or `SCRIVMARK_AGENT` records which
+  agent replied, decided, resolved or handed over, beside the side's
+  initials, in the record, the viewer and the export.
+- **Reasons with decisions.** `accept`/`reject --because "..."`, also from
+  the viewer's decision popup, kept with the change and shown wherever it is
+  listed.
+- **What's new.** `scrivmark news` lists what the other side did in its last
+  turn; the viewer marks new items and the Items panel filters them.
+- **Read-only when it is not your turn.** Opening a round the other side
+  holds (say, the reviewer looking at a returned round in their own clone)
+  gives a read-only view; before, it would have acted as the other side.
+- The agent guide has a section for agents who are themselves the authors,
+  shaped by a trial round in which Claude and Codex were the authors: they
+  caught a deliberate error among the reviewer's edits, rejected it with the
+  reason, and reported what was awkward. From that trial:
+  `respond --dry-run`; refusals come back as JSON under `--json`;
+  `changes --json` gives each change's sentence (`context`) and line; a
+  superseded change can carry a reason (`reject c4 --because ...`); `open` and
+  `respond` say plainly what happened.
+- `scrivmark status` says whose turn it is; initials skip "and" ("Claude and
+  Codex" is CC).
+- `scrivmark open --as NAME` now holds for that clone: the viewer and later
+  commands there act as NAME until a new round is started.
+- Every write from the viewer carries the revision of the page it was made
+  on, so nothing made before a handover can land after it.
+- Answered asks join the record at each handover, not only at return and
+  close.
+- Times are recorded to the millisecond, so acts and handovers in the same
+  second keep their order; older records are read as before.
 
 - The README is rewritten around what scrivmark now does, with new screenshots.
 - Long entries in the Items panel no longer wrap under their type.
