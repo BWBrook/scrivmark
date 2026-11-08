@@ -74,13 +74,13 @@ def _preview(command: str, pf: dict, as_json: bool) -> None:
     raise typer.Exit(0 if pf["ready"] else 1)
 
 
-def _who(rv: review.Review) -> str:
-    """The side whose turn it is acts: the reviewer while the round is open or
-    being signed off, the authors while it is returned."""
-    rnd = rv.rec["round"]
-    if review.acting(rv.rec) == "reviewer":
-        return rnd["reviewer"]["initials"]
-    return (rnd["author"] or {"initials": config.identity().initials})["initials"]
+_who = review.who
+
+
+def _chain(rv: review.Review, expect: str | None, i: int) -> str | None:
+    """An --expect covers a whole batch: each step after the first expects the
+    revision the step before it left."""
+    return expect if i == 0 or expect is None else rv.after
 
 
 By = Annotated[Optional[str], typer.Option("--by", help="The agent acting, e.g. 'Codex' or 'Claude (Opus 5.5)'. "
@@ -378,13 +378,17 @@ def open_(round_id: Annotated[str, typer.Argument(help="Round id, e.g. 2026-11-0
     if as_:
         os.environ["SCRIVMARK_AS"] = as_
         config.acting_as(root, as_)
-    info = rounds.open_round(root, round_id)
+    info = rounds.open_round(root, round_id, claim=bool(as_))
     rnd = review.active(root).rec["round"]
     side = {"open": "the reviewer reviews", "returned": "the authors respond",
             "responded": "the reviewer signs off", "closed": "closed"}[info["status"]]
     msg = (f"Opened round {info['round']} ({info['status']}: {side})"
            + (f", as the authors ({rnd['author']['name']})" if info["status"] == "returned" and rnd.get("author") else "")
            + ".")
+    if info["waiting"]:
+        msg += ("\nIt is the other side's turn, so the round is read-only for you here until it comes back."
+                + (f" Acting for the authors? `scrivmark open {info['round']} --as \"Name\"`."
+                   if info["status"] == "returned" else ""))
     if info["merged"]:
         msg += "\nBrought in newer work from the author branch."
     if info["invalidated"]:
@@ -513,7 +517,7 @@ def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_js
     done = []
     for i, cid in enumerate(ids):
         try:
-            done.append(review.decide(rv, cid, decision, _who(rv), expect if i == 0 else None, because, agent))
+            done.append(review.decide(rv, cid, decision, _who(rv), _chain(rv, expect, i), because, agent))
         except ScrivError as e:
             if not done:
                 raise
@@ -720,7 +724,7 @@ def reply(thread_id: str, body: Annotated[str, typer.Option()], by: By = None, e
 def resolve(thread_ids: list[str], by: By = None, expect: Expect = None, as_json: Json = False):
     """Mark threads resolved."""
     rv = review.active(_root())
-    done = [review.set_thread(rv, tid, "resolved", expect if i == 0 else None, _who(rv), _agent(by))
+    done = [review.set_thread(rv, tid, "resolved", _chain(rv, expect, i), _who(rv), _agent(by))
             for i, tid in enumerate(thread_ids)]
     _emit(done, as_json, "\n".join(f"{t['id']} resolved" for t in done))
 
@@ -759,7 +763,7 @@ def keep(draft_ids: Annotated[Optional[list[str]], typer.Argument()] = None,
         return
     if not draft_ids:
         raise ScrivError("Name the drafts to keep, or pass --all.")
-    out = [review.triage(rv, did, True, _who(rv), expect=expect if i == 0 else None) for i, did in enumerate(draft_ids)]
+    out = [review.triage(rv, did, True, _who(rv), expect=_chain(rv, expect, i)) for i, did in enumerate(draft_ids)]
     _emit(out, as_json, "\n".join(f"kept {d}" for d in draft_ids))
 
 

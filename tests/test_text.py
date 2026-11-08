@@ -1,4 +1,4 @@
-from scrivmark.blocks import guarded_segments, scan
+from scrivmark.blocks import guarded_segments
 from scrivmark.selection import map_selection
 from scrivmark.textdiff import diff_units, projection
 

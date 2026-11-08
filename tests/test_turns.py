@@ -18,6 +18,8 @@ cli = CliRunner()
 
 def run(*args, agent=None):
     r = cli.invoke(app, [*args, "--json"], env={"SCRIVMARK_AGENT": agent} if agent else {})
+    if isinstance(r.exception, ScrivError):
+        raise r.exception
     assert r.exit_code == 0, r.output
     return json.loads(r.output) if r.output.strip() else None
 
@@ -31,14 +33,17 @@ def reviewed(repo, monkeypatch):
     review.comment(rv, review.anchor_quote(rv, "paper.md", "dig burrows"), "Which species?", "BWB")
     review.comment(rv, review.anchor_quote(rv, "paper.md", "Bare-nosed"), "Common name first?", "BWB")
     info = rounds.return_round(repo, push=False)
-    monkeypatch.setenv("SCRIVMARK_AS", "Barry W. Brook")
+    monkeypatch.setenv("SCRIVMARK_AS", "Claude and Codex")
     rounds.open_round(repo, info["round"])
-    rv = review.active(repo)
-    rv.rec["round"]["author"] = {"name": "Claude and Codex", "initials": "CC"}
-    from scrivmark import record
-    record.path(repo, rv.id).write_text(record.dumps(rv.rec))
-    git(repo, "commit", "-qam", "authors")
     return info["round"]
+
+
+def barry(monkeypatch):
+    monkeypatch.setenv("SCRIVMARK_AS", "Barry W. Brook")
+
+
+def agents(monkeypatch):
+    monkeypatch.setenv("SCRIVMARK_AS", "Claude and Codex")
 
 
 def test_agents_respond_reviewer_contests_and_sends_back(repo, monkeypatch):
@@ -67,6 +72,9 @@ def test_agents_respond_reviewer_contests_and_sends_back(repo, monkeypatch):
     assert {d["change"] for d in news["decisions"]} == {keep, refuse}
     assert [m["thread"] for m in news["messages"]] == [t1] and [r["thread"] for r in news["resolved"]] == [t2]
 
+    with pytest.raises(ScrivError, match="read-only for you"):
+        run("reply", t1, "--body", "One more thing.", agent="Claude")
+    barry(monkeypatch)
     with pytest.raises(ScrivError):
         review.replace_lines(rv, "paper.md", 1, 1, "x")
     run("contest", refuse, "--because", "It is a typo; please accept.")
@@ -80,6 +88,7 @@ def test_agents_respond_reviewer_contests_and_sends_back(repo, monkeypatch):
 
     rv = review.active(repo)
     assert rv.status == "returned" and len(rv.rec["round"]["handovers"]) == 3
+    agents(monkeypatch)
     news = run("news")
     assert news["turn"] == "author" and [k["change"] for k in news["contested"]] == [refuse]
     assert [m["body"] for m in news["messages"]] == ["Thanks, good."]
@@ -100,6 +109,7 @@ def test_respond_needs_every_change_decided(repo, monkeypatch):
 
 def test_the_other_sides_viewer_is_read_only(repo, monkeypatch):
     reviewed(repo, monkeypatch)
+    barry(monkeypatch)
     viewer = Viewer(repo)
     client = TestClient(build_app(viewer), base_url="http://127.0.0.1")
     client.cookies.set(viewer.cookie, viewer.token)
@@ -110,19 +120,6 @@ def test_the_other_sides_viewer_is_read_only(repo, monkeypatch):
     assert client.post("/api/selection", json={}).status_code == 200
     monkeypatch.setenv("SCRIVMARK_AS", "Claude and Codex")
     assert client.get("/api/state").json()["mode"] == "author"
-
-
-def test_human_author_still_closes_straight_from_returned(repo, monkeypatch):
-    rounds.start(repo)
-    edit(repo, "should should", "should")
-    info = rounds.return_round(repo, push=False)
-    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
-    rounds.open_round(repo, info["round"])
-    rv = review.active(repo)
-    review.decide(rv, "c1", "accepted", "SS")
-    out = rounds.close_round(repo, push=False)
-    assert out["decisions"]["accepted"] == 1
-    assert config.load(repo)
 
 
 def test_viewer_marks_what_is_new_and_can_contest(repo, monkeypatch):
@@ -168,11 +165,6 @@ def test_agent_conveniences(repo, monkeypatch):
     bad = subprocess.run([sys.executable, "-m", "scrivmark.cli", "accept", "c99", "--json"], cwd=repo,
                          capture_output=True, text=True)
     assert bad.returncode == 1 and "error" in json.loads(bad.stdout)
-    target = next(c for c in cs if c["reviewer"].strip() == "suggests")
-    edit(repo, "suggests that", "indicates that")
-    out = run("reject", target["id"], "--because", "Rewrote it more plainly.", agent="Codex")
-    assert out[0]["decision"] is None and out[0]["because"] == "Rewrote it more plainly."
-    assert next(c for c in run("changes") if c["id"] == target["id"])["state"] == "superseded"
 
 
 def _viewer(repo):
@@ -202,15 +194,20 @@ def test_tutorial_author_open_as_then_serve_is_author_mode(repo, monkeypatch):
 
 
 def test_a_write_from_before_a_handover_is_refused(repo, monkeypatch):
-    reviewed(repo, monkeypatch)
-    run("accept", "--all", agent="Claude")
+    rounds.start(repo)
+    edit(repo, "should should", "should")
+    rid = rounds.return_round(repo, push=False)["round"]
+    rounds.open_round(repo, rid, claim=True)
+    review.comment(review.active(repo), review.anchor_quote(review.active(repo), "paper.md", "dig burrows"), "Hm.", "BWB")
+    run("accept", "--all")
     run("respond", "--no-push")
     client = _viewer(repo)
     st = client.get("/api/state").json()
     assert st["mode"] == "signoff"
     run("return", "--no-push")
+    assert client.get("/api/state").json()["mode"] == "author"
     r = client.post("/api/reply", json={"thread": st["threads"][0]["id"], "body": "Late.", "rev": st["rev"]})
-    assert r.status_code in (403, 409)
+    assert r.status_code == 409 and r.json().get("stale")
     assert all(m["body"] != "Late." for t in review.active(repo).rec["threads"] for m in t["messages"])
 
 
@@ -218,6 +215,7 @@ def test_sign_off_cannot_apply_ask_wording(repo, monkeypatch):
     reviewed(repo, monkeypatch)
     run("accept", "--all")
     run("respond", "--no-push")
+    barry(monkeypatch)
     rv = review.active(repo)
     q = review.add_ask(rv, review.anchor_quote(rv, "paper.md", "dig burrows"), "Better verb?", "BWB")
     review.update_ask(rv, q["id"], answer="Use 'excavate'.", wording="excavate burrows", by="Claude")
@@ -270,9 +268,12 @@ def test_superseded_reasons_reach_news_and_previews_cover_send_back(repo, monkey
     cs = run("changes")
     target = next(c for c in cs if c["reviewer"].strip() == "suggests")
     edit(repo, "suggests that", "indicates that")
-    run("reject", target["id"], "--because", "Rewrote it.", agent="Codex")
+    out = run("reject", target["id"], "--because", "Rewrote it.", agent="Codex")
+    assert out[0]["decision"] is None and next(c for c in run("changes") if c["id"] == target["id"])["state"] == "superseded"
     run("accept", *[c["id"] for c in cs if c["id"] != target["id"]])
     run("respond", "--no-push")
+    assert json.loads(cli.invoke(app, ["return", "--dry-run", "--json"]).output)["blockers"][0]["kind"] == "turn"
+    barry(monkeypatch)
     news = run("news")
     assert any(d["decision"] == "superseded" and d["because"] == "Rewrote it." and d["agent"] == "Codex"
                for d in news["decisions"])

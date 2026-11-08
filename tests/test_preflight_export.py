@@ -1,11 +1,11 @@
 import json
+import os
+import re
 
-import pytest
 from typer.testing import CliRunner
 
 from scrivmark import export, review, rounds
 from scrivmark.cli import app
-from scrivmark.errors import ScrivError
 
 from conftest import edit, git
 
@@ -68,7 +68,9 @@ def returned(repo):
     rv = rounds.start(repo, statement="Reviewed by BWB with Claude.")
     edit(repo, "proves that", "tests whether")
     review.comment(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaim <script>alert(1)</script>?", "BWB")
-    return rounds.return_round(repo, push=False)["round"]
+    rid = rounds.return_round(repo, push=False)["round"]
+    os.environ["SCRIVMARK_AS"] = "Sam Student"  # the repo fixture's monkeypatch restores it
+    return rid
 
 
 def test_close_preview_with_pending_change(repo):
@@ -93,18 +95,6 @@ def test_close_preview_sees_author_branch_moving(repo):
     assert rounds.preflight(repo)["author_moved"] is True
 
 
-def test_closed_round_has_no_transition(repo, monkeypatch):
-    rid = returned(repo)
-    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
-    rv = review.active(repo)
-    review.decide(rv, "c1", "accepted", "SS")
-    review.set_thread(rv, rv.rec["threads"][0]["id"], "resolved")
-    rounds.close_round(repo, push=False)
-    git(repo, "checkout", "-q", f"review/{rid}")
-    pf = rounds.preflight(repo)
-    assert pf["transition"] is None and pf["ready"] is False and pf["notes"] == ["closed"]
-
-
 def test_markdown_export_of_returned_round(repo):
     rid = returned(repo)
     md = export.markdown(review.active(repo))
@@ -127,6 +117,9 @@ def test_export_of_closed_round_from_main_via_cli(repo, monkeypatch, tmp_path):
     out = tmp_path / "r.html"
     assert runner.invoke(app, ["export", rid, "--html", "-o", str(out)]).exit_code == 0
     assert "<table" in out.read_text()
+    git(repo, "checkout", "-q", f"review/{rid}")
+    pf = rounds.preflight(repo)
+    assert pf["transition"] is None and pf["ready"] is False and pf["notes"] == ["closed"]
 
 
 def test_html_export_is_inert(repo):
@@ -134,25 +127,15 @@ def test_html_export_is_inert(repo):
     rv = review.active(repo)
     rv.rec["threads"][0]["messages"].append(
         {"id": "m-x", "by": "SS", "at": "2026-11-06T10:00:00+11:00",
-         "body": "<img src=http://evil/x.png onerror=alert(1)> [click](javascript:alert(1)) ![pic](http://evil/p.png) **bold**"})
+         "body": "<img src=http://evil/x.png onerror=alert(1)> [click](javascript:alert(1)) ![pic](http://evil/p.png) "
+                 '**bold** [hover](https://example.org){onmouseover="alert(1)" style="background:url(https://evil/p)"} '
+                 '[x]{onclick="alert(2)"}\n\n::: {onclick="alert(3)"}\nblock\n:::'})
     out = export.html(rv)
     low = out.lower()
     assert "<script" not in low and "<img" not in low and "href=\"javascript" not in low and "<a " not in low
     assert "&lt;script&gt;" in out and "&lt;img" in out and "<strong>bold</strong>" in out
-    assert "<style>" in out and "<table" in out
-
-
-def test_html_export_drops_attributes_and_carries_its_own_policy(repo):
-    returned(repo)
-    rv = review.active(repo)
-    rv.rec["threads"][0]["messages"].append(
-        {"id": "m-y", "by": "SS", "at": "2026-11-06T10:00:00+11:00",
-         "body": '[hover](https://example.org){onmouseover="alert(1)" style="background:url(https://evil/p)"} '
-                 '[x]{onclick="alert(2)"}\n\n::: {onclick="alert(3)"}\nblock\n:::'})
-    out = export.html(rv)
-    import re
     assert not re.search(r"<[^>]*\b(onmouseover|onclick|style)=", out.split("</style>")[1])
-    assert "Content-Security-Policy" in out and "default-src 'none'" in out
+    assert "Content-Security-Policy" in out and "default-src 'none'" in out and "<table" in out
 
 
 def test_previews_honour_the_command_options(repo):
@@ -162,6 +145,7 @@ def test_previews_honour_the_command_options(repo):
     assert any("--no-push" in w for w in rounds.preflight(repo, push=False)["will"])
     edit(repo, "proves that", "suggests that")
     rounds.return_round(repo, push=False)
+    os.environ["SCRIVMARK_AS"] = "Sam Student"
     assert rounds.preflight(repo)["ready"] is False
     forced = rounds.preflight(repo, force=True)
     assert forced["ready"] is True and any("--force" in n for n in forced["notes"])

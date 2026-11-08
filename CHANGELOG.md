@@ -10,6 +10,42 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.6.1 (8 November 2026)
+
+A sanity pass over the round lifecycle, looking for state the code relied on
+but did not enforce. Every fix has a regression test that fails on 0.6.0.
+
+- **No acting out of turn from the command line.** The viewer was already
+  read-only for the side whose turn it is not; commands now refuse the same
+  way, so an agent replying after `respond`, or a reviewer typing in their
+  clone while the authors hold the round, is no longer recorded as the other
+  side.
+- **Looking does not commit.** `open` by the reviewer of a returned round only
+  checks it out. It used to record the reviewer as its author and commit,
+  which forked the round from the authors' copy. `open --as` still lets one
+  person play both parts.
+- **Authors' comments reach the reviewer.** A comment made while the text had
+  uncommitted edits (after any rejection) pointed at a snapshot on the
+  authors' machine and showed as orphaned in the reviewer's clone after
+  `respond`. Every handover now re-anchors such threads to its commit.
+- **Sign-off edits are refused, not slipped in.** A hand edit by the reviewer
+  during sign-off was committed by `close` or `return` as "author responses"
+  and merged untracked. Both now refuse any change since the authors' handed
+  over commit, committed or not (the preview says so); text a contest puts
+  back is still sent.
+- **Rejecting a deleted or renamed file works.** It failed as "not tracked";
+  the restored file is now written and staged for the authors' commit.
+- **Concurrent writers.** An editor's save while scrivmark works out a
+  change is no longer overwritten (a save in the instant of replacement can
+  still race it); the viewer's revision is taken before it reads anything,
+  so a CLI change made meanwhile makes the page's edit stale instead of being
+  overwritten; `--expect` on `accept`, `reject`, `resolve` and `keep` with
+  several ids now covers every item, not only the first.
+- Previews (`--dry-run`) say when it is the other side's turn.
+- Smaller: record writes from round transitions are atomic; an accepted change
+  undone by a merged author branch loses its old reason too; the viewer
+  notices `open --as` without a restart.
+
 ## 0.6.0 (7 November 2026)
 
 Rounds that go back and forth, and agents as authors.

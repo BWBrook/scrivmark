@@ -6,9 +6,10 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
-from . import config, gitutil, record
+from . import config, gitutil, record, review
 from .errors import ScrivError
-from .review import BRANCH_PREFIX, Review, active, archive_asks, catalogue, drafts, is_managed, locate, rebase_anchors, threads
+from .review import (BRANCH_PREFIX, Review, active, archive_asks, catalogue, drafts, is_managed, locate,
+                     rebase_anchors, require_turn, signoff_edits, threads, undecide)
 from .state import ensure_ignored, transaction
 
 TAG = "scrivmark/{id}/{which}"
@@ -110,10 +111,8 @@ def start(root: Path, author_branch: str | None = None, statement: str | None = 
     gitutil.git(root, "checkout", "-q", "-b", f"{BRANCH_PREFIX}{rid}", base)
     stmt = statement or config.default_statement(me)
     rec = record.blank(rid, {"name": me.name, "initials": me.initials}, branch, base, stmt)
-    p = record.path(root, rid)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(record.dumps(rec))
-    _commit(root, f"scrivmark: start review round {rid}", [str(p.relative_to(root))])
+    record.save(root, rec)
+    _commit(root, f"scrivmark: start review round {rid}", [str(record.path(root, rid).relative_to(root))])
     return Review(root, rec, ms)
 
 
@@ -141,6 +140,7 @@ def return_round(root: Path, push: bool = True, statement: str | None = None, ag
         rv = active(root)
         sending_back = rv.status == "responded"
         if sending_back:
+            require_turn(rv)
             if statement is not None:
                 raise ScrivError("The statement was set when the round was first returned.")
             info = _hand_over(root, rv, "author", agent)
@@ -163,6 +163,7 @@ def _return_locked(root: Path, statement: str | None = None, agent: str | None =
     rv = active(root)
     if rv.status != "open":
         raise ScrivError(f"Round {rv.id} is {rv.status}, not open.")
+    require_turn(rv)
     if statement is not None and not statement.strip():
         raise ScrivError("The statement needs some text.")
     left = drafts(rv)
@@ -180,7 +181,7 @@ def _return_locked(root: Path, statement: str | None = None, agent: str | None =
     if statement is not None:
         rv.rec["round"]["statement"] = statement.strip()
     archive_asks(rv)
-    record.path(root, rv.id).write_text(record.dumps(rv.rec))
+    record.save(root, rv.rec)
     _seal_return(root, rv)
     return {"round": rv.id, "returned": returned, "changes": len(rv.rec["changes"]),
             "threads": len(rv.rec["threads"]), "orphans": orphans, "pushed": False, "pr": False}
@@ -216,6 +217,7 @@ def respond(root: Path, push: bool = True, agent: str | None = None) -> dict:
             return _publish_handover(root, info, push)
         if rv.status != "returned":
             raise ScrivError(f"Round {rv.id} is {rv.status}; the authors respond to a returned round.")
+        require_turn(rv)
         _commit_work(root, f"scrivmark: author responses for {rv.id}")
         _require_clean(root, "bring in the latest author branch")
         integrate(rv)
@@ -229,22 +231,34 @@ def respond(root: Path, push: bool = True, agent: str | None = None) -> dict:
 
 def _hand_over(root: Path, rv: Review, to: str, agent: str | None) -> dict:
     """Pass a returned round between the authors and the reviewer, recorded."""
-    from .review import changes as list_changes
 
     rnd = rv.rec["round"]
     by = rnd["author"]["initials"] if to == "reviewer" and rnd["author"] else rnd["reviewer"]["initials"]
-    _commit_work(root, f"scrivmark: {'author responses' if to == 'reviewer' else 'reviewer follow-up'} for {rv.id}")
+    if to == "author":
+        _refuse_signoff_edits(rv)
+    _commit_work(root, f"scrivmark: {'author responses' if to == 'reviewer' else 'contested changes'} for {rv.id}")
+    head = gitutil.rev(root, "HEAD")
+    rebase_anchors(rv, head, snapshots_only=True)
     at = record.now()
     hs = list(rnd.get("handovers") or ([{"to": "author", "at": rnd["returned_at"]}] if rnd.get("returned_at") else []))
-    hs.append({"to": to, "at": at, "by": by, **({"agent": agent} if agent else {})})
+    hs.append({"to": to, "at": at, "by": by, "commit": head, **({"agent": agent} if agent else {})})
     rnd.update({"status": "responded" if to == "reviewer" else "returned", "handovers": hs})
     if to == "reviewer":
         rnd["responded_at"] = at
     archive_asks(rv)
-    record.path(root, rv.id).write_text(record.dumps(rv.rec))
+    record.save(root, rv.rec)
     _commit(root, f"scrivmark: {rv.id} {'back to the reviewer' if to == 'reviewer' else 'back to the authors'}",
             [rv.record_rel])
     return _handover_info(rv, to)
+
+
+def _refuse_signoff_edits(rv: Review) -> None:
+    edits = signoff_edits(rv)
+    if edits:
+        raise ScrivError("These files were edited during sign-off:\n  " + "\n  ".join(edits[:10]) +
+                         "\nWhile you sign off the text is the authors', so these edits would reach them (or the "
+                         "merge) untracked. Undo them (`git restore <file>`) and comment instead; an edit of your own "
+                         "belongs in a new round.")
 
 
 def _handover_info(rv: Review, to: str) -> dict:
@@ -339,15 +353,20 @@ def integrate(rv: Review) -> dict:
     invalidated = []
     for c in rv.rec["changes"]:
         if c["decision"] == "accepted" and c["type"] != "file" and locate(rv, c) is None:
-            c.update({"decision": None, "by": None, "at": None})
+            undecide(c)
             invalidated.append(c["id"])
     rv.rec["round"]["integrated"] = tip
-    record.path(rv.root, rv.id).write_text(record.dumps(rv.rec))
+    record.save(rv.root, rv.rec)
     _commit(rv.root, f"scrivmark: record integrated author branch for {rv.id}", [rv.record_rel])
     return {"merged": merged, "invalidated": invalidated}
 
 
-def open_round(root: Path, round_id: str) -> dict:
+def open_round(root: Path, round_id: str, claim: bool = False) -> dict:
+    """Check out a round, up to date with origin. The side whose turn it is
+    takes it up (the first author to open a returned round is recorded as its
+    author, and newer author-branch work is merged in); the other side only
+    looks, and nothing is committed. `claim` takes the authors' part even as
+    the reviewer, for one person playing both sides."""
     branch = f"{BRANCH_PREFIX}{round_id}"
     if gitutil.has_remote(root):
         gitutil.git(root, "fetch", "-q", "--tags", "origin", check=False)
@@ -366,16 +385,18 @@ def open_round(root: Path, round_id: str) -> dict:
         proc = subprocess.run(["git", "merge", "-q", "--ff-only", remote], cwd=root, capture_output=True, text=True)
         if proc.returncode != 0:
             raise ScrivError(f"The round here and on origin have diverged; settle it with git first.\n{proc.stderr}")
-    rv = active(root)
-    result = {"round": rv.id, "status": rv.status, "merged": False, "invalidated": []}
-    if rv.status == "returned":
-        if rv.rec["round"]["author"] is None:
-            me = config.identity(root)
-            rv.rec["round"]["author"] = {"name": me.name, "initials": me.initials}
-            record.path(root, rv.id).write_text(record.dumps(rv.rec))
-            _commit(root, f"scrivmark: {me.initials} opens review round {rv.id}", [rv.record_rel])
-        _require_clean(root, "bring in the latest author branch")
-        result.update(integrate(rv))
+    with transaction(root):
+        rv = active(root)
+        result = {"round": rv.id, "status": rv.status, "merged": False, "invalidated": [],
+                  "waiting": review.other_side(rv.rec, review.me(root)) and not claim}
+        if rv.status == "returned" and not result["waiting"]:
+            if rv.rec["round"]["author"] is None:
+                me = config.identity(root)
+                rv.rec["round"]["author"] = {"name": me.name, "initials": me.initials}
+                record.save(root, rv.rec)
+                _commit(root, f"scrivmark: {me.initials} opens review round {rv.id}", [rv.record_rel])
+            _require_clean(root, "bring in the latest author branch")
+            result.update(integrate(rv))
     return result
 
 
@@ -389,6 +410,7 @@ def close_round(root: Path, force: bool = False, push: bool = True, round_id: st
                 _commit(root, f"scrivmark: close review round {rv.id}", [rv.record_rel])
             info = {"round": rv.id, "forced": bool(rv.rec["round"].get("forced")), "invalidated": []}
         elif rv.status in ("returned", "responded"):
+            require_turn(rv)
             info = _close_record(root, rv, force)
         else:
             raise ScrivError(f"Round {rv.id} is {rv.status}; only a returned round can be closed.")
@@ -402,7 +424,9 @@ def close_round(root: Path, force: bool = False, push: bool = True, round_id: st
 def _close_record(root: Path, rv: Review, force: bool) -> dict:
     from .review import changes as list_changes
 
-    _commit_work(root, f"scrivmark: author responses for {rv.id}")
+    if rv.status == "responded":
+        _refuse_signoff_edits(rv)
+    _commit_work(root, f"scrivmark: {'author responses' if rv.status == 'returned' else 'contested changes'} for {rv.id}")
     integration = integrate(rv)
     cs = list_changes(rv)
     pending = [c["id"] for c in cs if c["state"] == "pending"]
@@ -421,7 +445,7 @@ def _close_record(root: Path, rv: Review, force: bool) -> dict:
     if force and (pending or open_threads):
         rv.rec["round"]["forced"] = True
     archive_asks(rv)
-    record.path(root, rv.id).write_text(record.dumps(rv.rec))
+    record.save(root, rv.rec)
     _commit(root, f"scrivmark: close review round {rv.id}", [rv.record_rel])
     return {"round": rv.id, "forced": bool(rv.rec["round"].get("forced")), "invalidated": integration["invalidated"]}
 
@@ -550,7 +574,7 @@ def preflight(root: Path, round_id: str | None = None, statement: str | None = N
     "checks": [{kind, ok, text}], "blockers": [{kind, text, ...}],
     "notes": [...], "will": [...], ...} plus transition-specific fields."""
     rv = active(root, round_id)
-    rnd = rv.rec["round"]
+    rv.rec["round"]
     base = {"round": rv.id, "status": rv.status}
     if rv.status == "closed":
         return {**base, "transition": None, "ready": False, "checks": [], "blockers": [],
@@ -568,6 +592,8 @@ def preflight(root: Path, round_id: str | None = None, statement: str | None = N
                 if not c["ok"] and c.get("forceable"):
                     c["ok"] = True
                     out["notes"].append(f"--force closes anyway, and the record says so: {c['text']}")
+    if review.other_side(rv.rec, review.me(root)):
+        out["checks"].insert(0, _check("turn", False, "It is the other side's turn; this is read-only for you"))
     out["blockers"] = [{k: v for k, v in c.items() if k != "ok"} for c in out["checks"] if not c["ok"]]
     out["ready"] = not out["blockers"]
     return {**base, **out}
@@ -628,13 +654,17 @@ def _preflight_send_back(root: Path, rv: Review, push: bool = True) -> dict:
         notes.append(f"{len(pending)} contested change(s) go back for the authors to decide again: {_ids(pending)}")
     if open_threads:
         notes.append(f"{len(open_threads)} comment thread(s) open: {_ids(open_threads)}")
+    edits = signoff_edits(rv)
+    checks = [_check("signoff_edits", not edits, f"{len(edits)} file(s) edited by hand during sign-off, which would "
+                     f"reach the authors untracked (`git restore` them): {_ids(edits)}" if edits
+                     else "No untracked edits", files=edits)]
     pub = _publication(root, rv, f"{BRANCH_PREFIX}{rv.id}")
     if not push:
         pub["remote"] = None
     will = ["Hand the round back to the authors",
             f"Push to origin ({pub['remote']}) and note it on the pull request" if pub["remote"]
             else "Nothing is pushed" + (" (--no-push)" if not push else " (no remote)")]
-    return {"transition": "return", "checks": [], "notes": notes, "will": will, "pending": pending,
+    return {"transition": "return", "checks": checks, "notes": notes, "will": will, "pending": pending,
             "open_threads": open_threads, "publication": pub}
 
 
@@ -702,13 +732,19 @@ def _preflight_close(root: Path, rv: Review, push: bool = True) -> dict:
         notes.append("You are signing off. Close it, or send it back to the authors with `scrivmark return`"
                      + (f" ({len(pending)} contested change(s) are theirs to decide again)" if pending else ""))
     decisions = {k: sum(1 for c in cs if c["state"] == k) for k in ("accepted", "rejected", "superseded")}
-    uncommitted = [p for p in gitutil.dirty_paths(root) if not is_managed(p)]
-    if uncommitted:
-        notes.append(f"{len(uncommitted)} uncommitted edit(s) will be committed as author responses")
+    if rv.status == "responded":
+        edits = signoff_edits(rv)
+        checks.append(_check("signoff_edits", not edits, f"{len(edits)} file(s) edited by hand during sign-off, "
+                             f"which would be merged untracked (`git restore` them): {_ids(edits)}" if edits
+                             else "No untracked edits", files=edits))
+    else:
+        uncommitted = [p for p in gitutil.dirty_paths(root) if not is_managed(p)]
+        if uncommitted:
+            notes.append(f"{len(uncommitted)} uncommitted edit(s) will be committed as author responses")
     pub = _publication(root, rv, f"{BRANCH_PREFIX}{rv.id}")
     if not push:
         pub["remote"] = None
-    will = [f"Record the decisions and close the round",
+    will = ["Record the decisions and close the round",
             f"Merge {BRANCH_PREFIX}{rv.id} into {target}"]
     if pub["remote"]:
         will.append(f"Push to origin ({pub['remote']})" + (" and merge the pull request"

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import config, gitutil, latex, record
 from .errors import Conflict, ScrivError
-from .state import LOCAL, local_dir, read_json, revision, transaction
+from .state import LOCAL, atomic_write, local_dir, read_json, revision, transaction
 from .textdiff import diff_units, projection
 
 BRANCH_PREFIX = "review/"
@@ -28,6 +28,7 @@ class Review:
     root: Path
     rec: dict
     ms: config.Manuscript
+    after: str | None = None
 
     @property
     def id(self) -> str:
@@ -42,7 +43,8 @@ class Review:
         return f"{record.REVIEWS}/{self.id}.json"
 
     def watched(self) -> list[str]:
-        files = set(self.ms.sources) | {c["file"] for c in self.rec["changes"]} | {self.record_rel}
+        files = (set(self.ms.sources) | {c["file"] for c in self.rec["changes"]}
+                 | {c["old_file"] for c in self.rec["changes"] if c.get("old_file")} | {self.record_rel})
         return sorted(files)
 
     def guarded(self) -> list[str]:
@@ -120,9 +122,52 @@ def _within(at: str | None, window: tuple[str | None, str | None]) -> bool:
 
 def _agent(agent: str | None) -> dict:
     return {"agent": agent} if agent else {}
+
+
+def me(root: Path) -> str | None:
+    try:
+        return config.identity(root).name
+    except ScrivError:
+        return None
+
+
+def other_side(rec: dict, name: str | None) -> bool:
+    """Whether `name` is recognisably the side whose turn it is not: the
+    reviewer while the authors hold the round, or the authors while the
+    reviewer signs off. Nobody is when one person plays both sides."""
+    rnd = rec["round"]
+    role, author = acting(rec), (rnd.get("author") or {}).get("name")
+    if role is None or name is None or author == rnd["reviewer"]["name"]:
+        return False
+    if role == "author":
+        return name == rnd["reviewer"]["name"]
+    return name == author
+
+
+def require_turn(rv: "Review") -> None:
+    """Refuse to act for the other side: a round's record and branch are
+    shared, so an act by the side whose turn it is not would be recorded as
+    the other side's."""
+    if other_side(rv.rec, me(rv.root)):
+        if acting(rv.rec) == "author":
+            raise ScrivError(f"Round {rv.id} is with the authors, and you are its reviewer, so it is read-only for "
+                             f"you until they respond. Acting for the authors? `scrivmark open {rv.id} --as \"Name\"`.")
+        raise ScrivError(f"Round {rv.id} is with the reviewer to sign off, so it is read-only for you until it "
+                         "comes back.")
+
+
+def who(rv: "Review") -> str:
+    """The initials of the side whose turn it is, which every act records."""
+    rnd = rv.rec["round"]
+    if acting(rv.rec) == "reviewer":
+        return rnd["reviewer"]["initials"]
+    return (rnd["author"] or {"initials": config.identity(rv.root).initials})["initials"]
+
+
 PHASE_ERROR = {
     OPEN: "Drafts belong to the reviewer, before the round is returned.",
-    RETURNED: "Only a returned round has changes to decide.",
+    RETURNED: "Changes are decided by the authors while the round is returned to them; signing off, contest a "
+              "decision instead.",
     RESPONDED: "That is for the reviewer, once the authors have responded (`scrivmark respond`).",
 }
 
@@ -137,18 +182,22 @@ def _locked(rv: Review, expect: str | None, allowed: tuple[str, ...]):
         if rv.status not in allowed:
             raise ScrivError("This round is closed." if rv.status == "closed" else
                              PHASE_ERROR.get(allowed, f"Round {rv.id} is {rv.status}; that needs it {' or '.join(allowed)}."))
+        require_turn(rv)
         yield writes
         for rel in writes:
             if rel != rv.record_rel and not rel.startswith(f"{LOCAL}/"):
                 writable(rv, rel)
+    rv.after = writes.rev
 
 
 def writable(rv: Review, rel: str) -> None:
     """A manuscript file may be written only if it is inside the repository
-    and tracked by git, checked at the moment of writing: an edit to anything
-    else would never reach the review's record."""
+    and tracked by git (or was in the round's base: a deleted file being put
+    back), checked at the moment of writing: an edit to anything else would
+    never reach the review's record."""
     config.inside(rv.root, rel)
-    if not gitutil.ok(rv.root, "ls-files", "--error-unmatch", "--", rel):
+    if not (gitutil.ok(rv.root, "ls-files", "--error-unmatch", "--", rel)
+            or gitutil.ok(rv.root, "cat-file", "-e", f"{rv.rec['round']['base']}:{rel}")):
         raise ScrivError(f"{rel} is not tracked by git, so an edit to it would not be recorded. Commit it first.")
 
 
@@ -320,8 +369,6 @@ def _find_change(rv: Review, cid: str) -> dict:
 
 def decide(rv: Review, cid: str, decision: str, who: str, expect: str | None = None,
            because: str | None = None, agent: str | None = None) -> dict:
-    if rv.status != "returned":
-        raise ScrivError("Changes are decided after the reviewer returns the round.")
     with _locked(rv, expect, RETURNED) as writes:
         c = _find_change(rv, cid)
         if c["decision"]:
@@ -343,6 +390,8 @@ def decide(rv: Review, cid: str, decision: str, who: str, expect: str | None = N
             c["because"] = because.strip()
         c.update(_agent(agent))
         writes[rv.record_rel] = record.dumps(rv.rec)
+    if decision == "rejected" and c["type"] == "file" and c["status"] in ("D", "R"):
+        gitutil.git(rv.root, "add", "--", c["old_file"] or c["file"])
     return c
 
 
@@ -375,8 +424,6 @@ def _reject_writes(rv: Review, c: dict) -> dict:
 def undo(rv: Review, cid: str, expect: str | None = None) -> dict:
     """Reopen a decision. Undoing a rejection puts the reviewer's text back,
     only where scrivmark's own restoration is still exactly in place."""
-    if rv.status != "returned":
-        raise ScrivError("Decisions can be reopened only while the round is with the author.")
     with _locked(rv, expect, RETURNED) as writes:
         c = _find_change(rv, cid)
         if not c["decision"]:
@@ -398,6 +445,10 @@ def _reopen(rv: Review, c: dict, writes: dict) -> None:
         cur = rv.text(c["file"])
         s, e = t["range"]
         writes[c["file"]] = cur[:s] + c["reviewer"] + cur[e:]
+    undecide(c)
+
+
+def undecide(c: dict) -> None:
     c.update({"decision": None, "by": None, "at": None})
     c.pop("because", None)
     c.pop("agent", None)
@@ -416,11 +467,48 @@ def contest(rv: Review, cid: str, who: str, because: str, expect: str | None = N
             raise ScrivError(f"{cid} has no decision to contest.")
         was = {"decision": c["decision"], "by": c["by"], "at": c["at"],
                **({"because": c["because"]} if c.get("because") else {}), **_agent(c.get("agent"))}
+        if c["decision"] == "rejected" and c["file"] in signoff_edits(rv):
+            raise Conflict(f"{c['file']} has been edited by hand during sign-off, so the reviewer's text was not "
+                           "put back. Undo that edit (`git restore`) first.")
         _reopen(rv, c, writes)
+        if c["file"] in writes:
+            base = _signoff_base(rv)
+            put_back = read_json(rv.root / _put_back_rel(rv), {})
+            files = put_back.get("files", {}) if put_back.get("commit") == base else {}
+            files[c["file"]] = hashlib.sha256(writes[c["file"]].encode()).hexdigest()
+            writes[_put_back_rel(rv)] = json.dumps({"commit": base, "files": files})
         c.setdefault("contested", []).append({"by": who, "at": record.now(), "because": because.strip(),
                                               "was": was, **_agent(agent)})
         writes[rv.record_rel] = record.dumps(rv.rec)
     return c
+
+
+def _put_back_rel(rv: Review) -> str:
+    return str((local_dir(rv.root, rv.id) / "contested.json").relative_to(rv.root))
+
+
+def _signoff_base(rv: Review) -> str:
+    """The commit the authors handed over at their last response (HEAD for
+    records from before handovers named their commit)."""
+    hs = handovers(rv.rec)
+    return hs[-1].get("commit", "HEAD") if hs and hs[-1]["to"] == "reviewer" else "HEAD"
+
+
+def signoff_edits(rv: Review) -> list[str]:
+    """Files changed since the authors handed the round over, committed or
+    not, other than by a contest in this turn putting the reviewer's text
+    back. While the reviewer signs off the text is the authors': such an
+    edit would reach them, or the merge, untracked."""
+    base = _signoff_base(rv)
+    put_back = read_json(rv.root / _put_back_rel(rv), {})
+    allowed = put_back.get("files", {}) if put_back.get("commit") == base else {}
+    changed = gitutil._nul(gitutil.git(rv.root, "diff", "--name-only", "-z", "--no-renames", base)) + gitutil.untracked(rv.root)
+    out = []
+    for rel in dict.fromkeys(changed):
+        f = rv.root / rel
+        if not is_managed(rel) and (not f.exists() or allowed.get(rel) != hashlib.sha256(f.read_bytes()).hexdigest()):
+            out.append(rel)
+    return out
 
 
 # ---------------------------------------------------------------- anchoring
@@ -430,8 +518,7 @@ def _snapshot(rv: Review, text: str) -> str:
     h = hashlib.sha256(text.encode()).hexdigest()[:16]
     p = local_dir(rv.root, rv.id) / "snapshots" / h
     if not p.exists():
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        atomic_write(p, text)
     return f"snap:{h}"
 
 
@@ -765,10 +852,14 @@ def reattach(rv: Review, tid: str, anchor: dict, expect: str | None = None) -> d
     return t
 
 
-def rebase_anchors(rv: Review, commit: str) -> list[str]:
-    """Re-express every resolvable anchor against `commit`; return orphan ids."""
+def rebase_anchors(rv: Review, commit: str, snapshots_only: bool = False) -> list[str]:
+    """Re-express every resolvable anchor against `commit`; return orphan ids.
+    With `snapshots_only`, only anchors to a local snapshot, which no other
+    clone has; the rest keep the text they were written against."""
     orphans = []
     for t in rv.rec["threads"]:
+        if snapshots_only and not t["anchor"]["rev"].startswith("snap:"):
+            continue
         where = resolve(rv, t["anchor"])
         if where["state"] != "ok":
             orphans.append(t["id"])
@@ -1081,6 +1172,7 @@ def replace_lines(rv: Review, rel: str, first: int, last: int, new_text: str, fi
         if rv.status not in ("open", "returned"):
             raise ScrivError("This round is closed." if rv.status == "closed" else
                              "The text is the authors' while you sign off; comment, or contest a decision, instead.")
+        require_turn(rv)
         writable(rv, rel)
         lines = rv.text(rel).splitlines(keepends=True)
         if not (1 <= first <= last <= len(lines)):

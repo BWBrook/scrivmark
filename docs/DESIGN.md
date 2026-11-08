@@ -84,11 +84,16 @@ repo root. `scrivmark init` writes it, detecting a makedoc profile or
   **base commit** `B` on it;
 - branch `review/<round id>`;
 - record file `reviews/<round id>.json`;
-- status `open` → `returned` → `closed`.
+- status `open` → `returned` (→ `responded` → `returned` …) → `closed`.
 
-**Phase ownership.** While `open`, only the reviewer side writes to the round;
-while `returned`, only the author side. Further back-and-forth is a new round.
-This removes concurrent cross-clone edits to the record by construction.
+**Phase ownership.** Only the side whose turn it is writes to the round: the
+reviewer while it is `open` or `responded`, the authors while it is
+`returned`. This removes concurrent cross-clone edits to the record by
+construction. Every write, from the CLI or the viewer, goes through one check
+(`review.require_turn`): someone recognisably the other side (the reviewer
+while the authors hold the round, or the reverse) is refused, and
+`open` by them only checks the round out, committing nothing, so peeking at a
+round never forks its history.
 
 **Returned snapshot `R`.** The commit holding the reviewer's final manuscript
 content. `return` creates `R`, then a separate metadata commit that records
@@ -146,13 +151,26 @@ round is `open` or `responded`, the authors while it is `returned`. Agents
 often run under their human's account, and the authors may themselves be
 agents, so identity cannot say whose turn it is. Each act also records the
 agent that performed it (`agent`, from `--by` or `SCRIVMARK_AGENT`) beside the
-side's initials. The viewer uses identity only to stop impersonation: a
-person whose name is the side not holding the round gets a read-only view,
-and the server refuses their writes. `open --as NAME` records who you are in
-that clone (`.scrivmark/_/as.json`), so one person can play both parts, as in
-the tutorial, or agents can act as the authors; `start` clears it. Every
-viewer write carries the page's revision, so a write made before a handover
-cannot land after it.
+side's initials. Identity is used only to stop acting for the other side: a
+person whose name is the side not holding the round gets a read-only viewer
+and refused commands. `open --as NAME` records who you are in that clone
+(`.scrivmark/_/as.json`), so one person can play both parts, as in the
+tutorial, or agents can act as the authors; `start` clears it. Every viewer
+write carries the page's revision, taken before anything on the page was
+read, so a write made before a handover, or over a change made meanwhile from
+the CLI, cannot land; a batch command's `--expect` covers every item in it.
+Each write also rechecks its files just before replacing them, so an editor's
+save made while scrivmark was working out the change is not overwritten (only a
+save in the instant between that check and the replacement can still race it).
+
+Every handover re-anchors to the commit it makes any thread anchored to a
+local snapshot (one written against uncommitted text), which the other clone
+does not have; threads anchored to commits keep the text they quote. While the reviewer signs off, the text is
+the authors': `return` and `close` refuse any change to the files since the
+commit the authors handed over (recorded in the handover), committed or not,
+since it would reach the authors, or the merge, untracked. What a contest in
+this turn puts back is recognised by its hash, bound to that commit
+(`.scrivmark/<round>/contested.json`).
 
 - `start` (reviewer) or `request --reviewer <user>` (author) cuts the branch
   from the author branch and writes the record and workflow statement.

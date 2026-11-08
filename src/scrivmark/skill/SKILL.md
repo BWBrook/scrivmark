@@ -60,7 +60,10 @@ accept, reject, reply, resolve, edit. If the authors run `scrivmark respond`,
 it is `responded` and back with the reviewer to sign off: reply, resolve or
 reopen threads, comment, `contest` a decision, then `close` or send it back
 with `return`. It can go back and forth like this as often as needed; a
-human author can also simply `close` from `returned`.
+human author can also simply `close` from `returned`. Whoever is recognisably
+the other side (by name) is refused: a round the authors hold is read-only for
+its reviewer, and the reverse. If you act for the authors under the
+reviewer's account, `scrivmark open <round> --as "Name"` first.
 
 Name yourself on everything you do: set `SCRIVMARK_AGENT` (say
 `SCRIVMARK_AGENT="Codex (gpt-6.1-sol)"`) or pass `--by`. It is recorded beside
@@ -221,6 +224,7 @@ their say-so: reply or reopen threads, `scrivmark contest c4 --because "..."`
 to send a decision back (a rejected edit is put back), and then `scrivmark
 close` or `scrivmark return` to send the round back to the authors. The text
 itself is the authors' during sign-off: suggest wording in a comment instead.
+Do not edit the files; `close` and `return` refuse while a hand edit is there.
 
 ## Helping an author
 

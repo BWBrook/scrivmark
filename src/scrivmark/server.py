@@ -83,30 +83,9 @@ class Viewer:
             return "read"
         if rv.status == "closed":
             return "closed"
-        if self.other_side(rv):
+        if review.other_side(rv.rec, review.me(self.root)):
             return "waiting"
         return {"open": "reviewer", "returned": "author", "responded": "signoff"}[rv.status]
-
-    def other_side(self, rv: review.Review) -> bool:
-        """Whether the person at this viewer is the side whose turn it is not,
-        as far as their identity shows (the reviewer looking at a round the
-        authors hold, or the reverse). Their viewer is then read-only."""
-        rnd = rv.rec["round"]
-        if rnd.get("author") and rnd["author"]["name"] == rnd["reviewer"]["name"]:
-            return False
-        try:
-            me = config.identity(self.root).name
-        except ScrivError:
-            return False
-        if review.acting(rv.rec) == "author":
-            return me == rnd["reviewer"]["name"]
-        return bool(rnd.get("author")) and me == rnd["author"]["name"]
-
-    def who(self, rv: review.Review) -> str:
-        rnd = rv.rec["round"]
-        if review.acting(rv.rec) == "reviewer":
-            return rnd["reviewer"]["initials"]
-        return (rnd["author"] or {"initials": config.identity().initials})["initials"]
 
     def state(self) -> dict:
         """Rendering runs in a worker thread; one at a time, so a burst of
@@ -133,12 +112,18 @@ class Viewer:
             return data
 
     def _state(self) -> dict:
+        """The page and the revision it carries back with each edit. The
+        revision is taken first and everything shown is read after it, so a
+        page is never older than its revision: a change made meanwhile by the
+        CLI makes the page's next edit stale rather than overwriting it."""
         ms = config.load(self.root)
+        rv = self.current()
+        rev = rv.rev() if rv else None
         rv = self.current()
         branch = gitutil.current_branch(self.root)
         key_paths = [config.CONFIG, *ms.files, *ms.bibliography, *([ms.csl] if ms.csl else []),
                      *([rv.record_rel, rv.drafts_rel, str(review._asks_path(rv).relative_to(self.root))] if rv else [])]
-        key = f"{branch}:{revision(self.root, key_paths)}"
+        key = f"{branch}:{review.me(self.root)}:{rev}:{revision(self.root, key_paths)}"
         if self.cache and self.cache[0] == key:
             return self.cache[1]
         mode = self.mode(rv)
@@ -160,13 +145,13 @@ class Viewer:
             "key": key, "mode": mode, "branch": branch, "html": html,
             "warnings": [w for w in warnings.splitlines() if w.strip()][:20],
             "round": rv.rec["round"] if rv else None,
-            "rev": rv.rev() if rv else None,
-            "me": self.who(rv) if rv else None,
+            "rev": rev,
+            "me": review.who(rv) if rv else None,
             "threads": [], "drafts": [], "asks": [], "changes": [],
             "news": None,
         }
         if rv:
-            me = self.who(rv)
+            me = review.who(rv)
             waiting = mode == "waiting"
             window = review.news_window(rv.rec)
             fresh = lambda at: review._within(at, window)  # noqa: E731
@@ -243,7 +228,7 @@ class Viewer:
             if ".git" in p.parts:
                 return p.name in ("HEAD",) or "refs" in p.parts
             if ".scrivmark" in p.parts:
-                return p.name in ("drafts.json", "asks.json")
+                return p.name in ("drafts.json", "asks.json", "as.json")
             return not p.name.startswith(".")
 
         async for _ in awatch(self.root, watch_filter=relevant, debounce=250, recursive=True):
@@ -412,32 +397,32 @@ def build_app(viewer: Viewer) -> Starlette:
         rv = viewer.need()
         viewer.check_render(b)
         anchor = viewer.anchor_from(rv, b)
-        t = review.comment(rv, anchor, b["body"], viewer.who(rv), b.get("rev"))
+        t = review.comment(rv, anchor, b["body"], review.who(rv), b.get("rev"))
         return JSONResponse(t)
 
     def reply(request: Request, b: dict):
         rv = viewer.need()
-        return JSONResponse(review.reply(rv, b["thread"], b["body"], viewer.who(rv), b.get("rev")))
+        return JSONResponse(review.reply(rv, b["thread"], b["body"], review.who(rv), b.get("rev")))
 
     def message(request: Request, b: dict):
         rv = viewer.need()
-        return JSONResponse(review.edit_message(rv, b["thread"], b["message"], b["body"], viewer.who(rv), b.get("rev")))
+        return JSONResponse(review.edit_message(rv, b["thread"], b["message"], b["body"], review.who(rv), b.get("rev")))
 
     def thread_status(request: Request, b: dict):
         rv = viewer.need()
         if b.get("reattach"):
             viewer.check_render(b)
             return JSONResponse(review.reattach(rv, b["thread"], viewer.anchor_from(rv, b), b.get("rev")))
-        return JSONResponse(review.set_thread(rv, b["thread"], b["status"], b.get("rev"), viewer.who(rv)))
+        return JSONResponse(review.set_thread(rv, b["thread"], b["status"], b.get("rev"), review.who(rv)))
 
     def decide(request: Request, b: dict):
         rv = viewer.need()
         decision = {"accept": "accepted", "reject": "rejected"}[b["decision"]]
-        return JSONResponse(review.decide(rv, b["change"], decision, viewer.who(rv), b.get("rev"), b.get("because")))
+        return JSONResponse(review.decide(rv, b["change"], decision, review.who(rv), b.get("rev"), b.get("because")))
 
     def contest(request: Request, b: dict):
         rv = viewer.need()
-        return JSONResponse(review.contest(rv, b["change"], viewer.who(rv), b.get("because") or "", b.get("rev")))
+        return JSONResponse(review.contest(rv, b["change"], review.who(rv), b.get("because") or "", b.get("rev")))
 
     def undo(request: Request, b: dict):
         rv = viewer.need()
@@ -446,8 +431,8 @@ def build_app(viewer: Viewer) -> Starlette:
     def triage(request: Request, b: dict):
         rv = viewer.need()
         if b.get("action") == "keep_all":
-            return JSONResponse(review.keep_all(rv, viewer.who(rv), b.get("rev")))
-        t = review.triage(rv, b["draft"], b["action"] == "keep", viewer.who(rv), b.get("body"),
+            return JSONResponse(review.keep_all(rv, review.who(rv), b.get("rev")))
+        t = review.triage(rv, b["draft"], b["action"] == "keep", review.who(rv), b.get("body"),
                           b.get("wording"), b.get("rev"))
         return JSONResponse(t or {})
 
@@ -488,7 +473,7 @@ def build_app(viewer: Viewer) -> Starlette:
     def ask(request: Request, b: dict):
         rv = viewer.need()
         viewer.check_render(b)
-        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"], viewer.who(rv), b.get("rev")))
+        return JSONResponse(review.add_ask(rv, viewer.anchor_from(rv, b), b["question"], review.who(rv), b.get("rev")))
 
     def ask_update(request: Request, b: dict):
         rv = viewer.need()
@@ -499,7 +484,7 @@ def build_app(viewer: Viewer) -> Starlette:
             if item["where"]["state"] != "ok":
                 raise Conflict("The passage this ask was about has changed; comment on it afresh.")
             s, e = item["where"]["range"]
-            t = review.comment(rv, review.anchor_at(rv, item["anchor"]["file"], s, e), b["comment"], viewer.who(rv), b.get("rev"))
+            t = review.comment(rv, review.anchor_at(rv, item["anchor"]["file"], s, e), b["comment"], review.who(rv), b.get("rev"))
             review.update_ask(rv, item["id"], done=True)
             return JSONResponse(t)
         if b.get("apply"):

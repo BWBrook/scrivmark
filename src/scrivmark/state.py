@@ -103,17 +103,35 @@ def recover(root: Path) -> list[str]:
     return todo
 
 
+class Writes(dict):
+    """The files a transaction will write, path to contents (None deletes).
+    Afterwards `rev` is the watched revision as the transaction left it,
+    taken under the lock, for a caller chaining one `expect` through a batch."""
+    rev: str | None = None
+
+
+STALE = "The manuscript or review changed since you looked; reload and try again."
+
+
 @contextmanager
 def transaction(root: Path, expect: str | None = None, watched: list[str] | None = None):
+    """The lock keeps scrivmark's own writers apart, but not an editor saving
+    a file: the watched files are checked again just before writing, so an
+    edit saved while the change was being worked out is not overwritten. Only
+    a save in the instant between that check and the replacement can still
+    race it; closing that needs the editor's cooperation."""
     lock = local_dir(root) / "lock"
     with open(lock, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             recover(root)
-            if expect is not None and watched is not None and revision(root, watched) != expect:
-                raise StaleRevision("The manuscript or review changed since you looked; reload and try again.")
-            writes: dict[str, str | None] = {}
+            before = revision(root, watched) if watched is not None else None
+            if expect is not None and before is not None and before != expect:
+                raise StaleRevision(STALE)
+            writes = Writes()
             yield writes
+            if writes and before is not None and revision(root, watched) != before:
+                raise StaleRevision(STALE)
             if writes:
                 ip = _intent_path(root)
                 atomic_write(ip, json.dumps({k: {"pre": _on_disk(root / k), "post": _digest(v), "data": _encode(v)}
@@ -121,6 +139,8 @@ def transaction(root: Path, expect: str | None = None, watched: list[str] | None
                 for rel, content in writes.items():
                     atomic_write(root / rel, content)
                 ip.unlink()
+            if watched is not None:
+                writes.rev = revision(root, watched)
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
 

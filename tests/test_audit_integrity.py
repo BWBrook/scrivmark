@@ -324,7 +324,7 @@ def test_writes_recheck_the_repository_boundary(ms, tmp_path):
 
 
 def test_a_source_added_mid_round_must_be_tracked_to_be_edited(ms):
-    rv = rounds.start(ms)
+    rounds.start(ms)
     (ms / "notes.md").write_text("Private.\n")
     (ms / ".gitignore").write_text(".scrivmark/\nnotes.md\n")
     (ms / "scrivmark.toml").write_text('[manuscript]\nfiles = ["paper.md", "notes.md"]\n')

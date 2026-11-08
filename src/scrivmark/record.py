@@ -6,6 +6,7 @@ from pathlib import Path
 import jsonschema
 
 from .errors import ScrivError
+from .state import atomic_write
 
 REVIEWS = "reviews"
 
@@ -39,7 +40,8 @@ SCHEMA = {
                 "handovers": {"type": "array", "items": {
                     "type": "object", "required": ["to", "at"],
                     "properties": {"to": {"enum": ["author", "reviewer"]}, "at": {"type": "string"},
-                                   "by": {"type": "string"}, "agent": {"type": "string"}}}},
+                                   "by": {"type": "string"}, "agent": {"type": "string"},
+                                   "commit": {"type": "string"}}}},
                 "statement": {"type": "string"},
                 "forced": {"type": "boolean"},
             },
@@ -177,6 +179,10 @@ def load(root: Path, round_id: str) -> dict:
     if not p.exists():
         raise ScrivError(f"No review record {p.relative_to(root)}")
     return validate(json.loads(p.read_text()))
+
+
+def save(root: Path, rec: dict) -> None:
+    atomic_write(path(root, rec["round"]["id"]), dumps(rec))
 
 
 def dumps(rec: dict) -> str:
