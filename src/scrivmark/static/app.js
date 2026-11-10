@@ -1,6 +1,6 @@
 "use strict";
 
-const S = { st: null, key: null, editing: null, active: null, cur: -1, selPosted: false, compose: {}, popDraft: null, edits: {} };
+const S = { st: null, key: null, editing: null, active: null, cur: -1, selPosted: false, compose: {}, open: new Set(), popDraft: null, edits: {} };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const doc = $("#doc"), margin = $("#margin"), tool = $("#tool"), pop = $("#pop");
@@ -391,10 +391,12 @@ function buildMargin() {
     const c = card[it.kind](it);
     c.dataset.t = it.id;
     c.addEventListener("click", () => setActive(it.id, false));
+    if (it.kind !== "ask") fold(c, it);
     margin.append(c);
     if (S.compose[`${it.kind}:${it.id}`]) reopen[it.kind](c, it, true);
     if (it.kind === "thread") for (const m of it.messages) if (S.compose[`msg:${it.id}:${m.id}`]) editMessage(c, it, m, true);
   }
+  if (S.active) $$(".card", margin).forEach(c => c.classList.toggle("active", c.dataset.t === S.active));
   if (owned) {
     const ta = $(`textarea[data-key="${owned.key}"]`, margin);
     if (ta) {
@@ -403,6 +405,59 @@ function buildMargin() {
       ta.scrollTop = owned.top;
     }
   }
+  layoutMargin();
+}
+
+const ABBREV = /(?:\b(?:e\.g|i\.e|et al|cf|vs|etc|Fig|Figs|Eq|Eqs|Dr|Mr|Mrs|Ms|Prof|No|ca|approx)|\b[A-Z])$/;
+
+function firstSentence(text) {
+  const t = text.trim();
+  const end = /[.?!]["')\]]*(?:\s+(?=[A-Z])|\s*$)/g;
+  let m, cut = t.length;
+  while ((m = end.exec(t))) {
+    if (m[0][0] === "." && ABBREV.test(t.slice(0, m.index))) continue;
+    cut = m.index + m[0].trimEnd().length;
+    break;
+  }
+  let s = t.slice(0, cut);
+  if (s.length > 160) s = s.slice(0, s.lastIndexOf(" ", 160) > 60 ? s.lastIndexOf(" ", 160) : 160).replace(/[\s,;:]+$/, "") + "…";
+  return s;
+}
+
+function composing(id) {
+  return Object.keys(S.compose).some(k => k.split(":")[1] === id);
+}
+
+function applyFold(c) {
+  if (!c.classList.contains("foldable")) return;
+  const id = c.dataset.t, edit = composing(id), open = edit || id === S.active || S.open.has(id);
+  const btn = $(".foldbtn", c);
+  c.classList.toggle("collapsed", !open);
+  btn.setAttribute("aria-expanded", String(open));
+  btn.textContent = open ? "Show less" : btn.dataset.more;
+  btn.hidden = edit;
+}
+
+function fold(c, it) {
+  const body = $(".body", c);
+  if (!body) return;
+  const full = body.textContent, short = firstSentence(full);
+  const replies = it.kind === "thread" ? it.messages.length - 1 : 0;
+  if (!full.trim() || (short === full.trim() && !replies && !$(".wording", c))) return;
+  body.after(el("span", { class: "short" }, short === full.trim() || short.endsWith("…") ? short : short + " …"));
+  const btn = el("button", { class: "foldbtn", "aria-expanded": "false",
+    onclick: e => { e.stopPropagation(); toggleFold(it.id); } });
+  btn.dataset.more = replies ? `+${replies} ${replies === 1 ? "reply" : "replies"}` : "more";
+  const acts = $(".acts", c);
+  acts ? acts.before(btn) : c.append(btn);
+  c.classList.add("foldable");
+  applyFold(c);
+}
+
+function toggleFold(id) {
+  if (S.open.has(id) || S.active === id) { S.open.delete(id); if (S.active === id) setActive(null, false); }
+  else S.open.add(id);
+  $$(".card", margin).forEach(applyFold);
   layoutMargin();
 }
 
@@ -415,6 +470,8 @@ function layoutMargin() {
     const it = all.find(x => x.id === c.dataset.t);
     return { c, want: it && it._mark ? it._mark.getBoundingClientRect().top - top0 : -1 };
   }).sort((a, b) => a.want - b.want);
+  const k = placed.findIndex(x => x.c.dataset.t === S.active && x.want >= 0);
+  for (let i = k - 1; i >= 0; i--) placed[i].want = Math.min(placed[i].want, placed[i + 1].want - placed[i].c.offsetHeight - 8);
   let y = 0;
   for (const x of placed) {
     const top = Math.max(x.want, y);
@@ -443,7 +500,7 @@ function threadCard(t) {
         ? el("button", { class: "msgedit", title: "Edit your comment (until the other side has seen it)",
             onclick: e => { e.stopPropagation(); editMessage(c, t, m); } }, "Edit")
         : null,
-      el("span", { class: "by" }, byline(m.by, m.agent)), m.body,
+      el("span", { class: "by" }, byline(m.by, m.agent)), el("span", { class: "body" }, m.body),
       m.edited_at ? el("span", { class: "muted small" }, " (edited)") : null)),
     t.status === "resolved" && t.resolved_by
       ? el("div", { class: "muted small resolvedby" }, `resolved by ${byline(t.resolved_by.by, t.resolved_by.agent)}`) : null);
@@ -471,7 +528,7 @@ function draftCard(d) {
     d.line ? null : el("div", { class: "tag" }, lostWhy(d) + (d.wording !== null
       ? ". Its edit can't be applied: make the change in the text yourself, then drop this draft." : "")),
     quoteLine(d),
-    d.body ? el("div", { class: "msg" }, d.body) : el("div", { class: "muted small" }, "Line edit, no comment"),
+    d.body ? el("div", { class: "msg" }, el("span", { class: "body" }, d.body)) : el("div", { class: "muted small" }, "Line edit, no comment"),
     d.wording !== null ? el("div", { class: "wording", title: "Applied as an edit if kept" }, `→ ${d.wording || "(delete the passage)"}`) : null);
   c.append(el("div", { class: "acts" },
     el("button", { class: "primary", onclick: e => { e.stopPropagation(); triage(d.id, "keep", undefined, undefined, shown); } }, d.wording !== null ? "Keep & apply" : "Keep"),
@@ -668,7 +725,8 @@ async function triage(id, action, body, wording, rev) {
 
 function setActive(id, scroll = true) {
   S.active = id;
-  $$(".card", margin).forEach(c => c.classList.toggle("active", c.dataset.t === id));
+  $$(".card", margin).forEach(c => { c.classList.toggle("active", c.dataset.t === id); applyFold(c); });
+  layoutMargin();
   $$("mark.scrv-hl", doc).forEach(m => m.classList.toggle("active", m.dataset.t === id));
   const it = [...S.st.threads, ...S.st.drafts, ...S.st.asks].find(x => x.id === id);
   const card = $(`.card[data-t="${CSS.escape(id)}"]`, margin);

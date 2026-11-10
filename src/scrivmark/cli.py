@@ -83,7 +83,7 @@ def _chain(rv: review.Review, expect: str | None, i: int) -> str | None:
     return expect if i == 0 or expect is None else rv.after
 
 
-By = Annotated[Optional[str], typer.Option("--by", help="The agent acting, e.g. 'Codex' or 'Claude (Opus 5.5)'. "
+By = Annotated[Optional[str], typer.Option("--by", help="The agent acting, as 'Agent (model)', e.g. 'Codex' or 'Claude (model)'. "
                                             "Default: $SCRIVMARK_AGENT. Recorded beside the side's initials.")]
 
 
@@ -109,21 +109,31 @@ def main() -> None:
 def init(files: Annotated[Optional[list[str]], typer.Argument(help="Manuscript files in reading order.")] = None,
          yes: Annotated[bool, typer.Option("--yes", help="Accept the detected files without naming them.")] = False,
          as_json: Json = False):
-    """Set up a repository for scrivmark: writes and commits scrivmark.toml.
+    """Set up a repository for scrivmark: writes scrivmark.toml, which `start`
+    commits on the round branch (the author's branch gets it when the round is merged).
 
     Name the manuscript files in reading order, e.g. `scrivmark init intro.md methods.md`.
-    With no files, it shows what it would detect; add --yes to accept that.
+    With no files, it shows what it would detect (reusing the config an earlier
+    round's branch carries, if any); add --yes to accept that.
     """
     info = rounds.init(_root(), files, write=bool(files) or yes)
-    listing = (f"Manuscript: {', '.join(info['files'])}\nBibliography: {', '.join(info['bibliography']) or 'none'}"
+    bib = ", ".join(info["bibliography"]) or "none"
+    if (inline := info.get("inline_references")) and inline["count"]:
+        bib += (f" ({inline['count']} references written out in {', '.join(inline['files'])}, "
+                f"{inline['doi']} with a DOI)")
+    listing = (f"Manuscript: {', '.join(info['files'])}\nBibliography: {bib}"
                f"\nCitation style: {info['csl'] or 'pandoc default'}")
     if info.get("source"):
         listing = f"From {info['source']}:\n{listing}"
+    if info.get("differs_from"):
+        listing += (f"\nNote: {info['differs_from']} names other files. If both rounds are merged, their "
+                    f"{config.CONFIG} files will conflict; `scrivmark init --yes` reuses that one instead.")
     if not info["written"]:
         _emit(info, as_json, listing + "\n\nNothing written yet. If that is right, run `scrivmark init --yes`; "
               "otherwise name the files in reading order: `scrivmark init intro.md methods.md results.md`.")
         return
-    _emit(info, as_json, listing + "\nWrote and committed scrivmark.toml. Edit it to change the file order.")
+    _emit(info, as_json, listing + f"\nWrote {config.CONFIG} (not committed: `scrivmark start` commits it on the round "
+          "branch, so the author's branch gets it only when the round is merged). Edit it to change the file order.")
 
 
 @app.command()
@@ -270,7 +280,28 @@ def start(author_branch: Annotated[Optional[str], typer.Option(help="Branch to r
     """Start a review round (reviewer)."""
     rv = rounds.start(_root(), author_branch, statement)
     _emit(rv.rec["round"], as_json, f"Started round {rv.id} on branch review/{rv.id}.\n"
-          "Edit the manuscript and add comments; run `scrivmark serve` to see the rendered review.")
+          f"Statement shown to the author: {rv.rec['round']['statement']}\n"
+          + ("" if statement else "(your default from `scrivmark whoami`; if it names the wrong model or agent, "
+             "`scrivmark return --statement '...'` replaces it)\n")
+          + "Edit the manuscript and add comments; run `scrivmark serve` to see the rendered review.")
+
+
+@app.command()
+def abandon(force: Annotated[bool, typer.Option(help="Abandon it even with kept comments or edits.")] = False,
+            as_json: Json = False):
+    """Give up a round you have not returned yet, to restart or drop the review
+    (reviewer). Its last state stays under a git tag, so it can be recovered."""
+    info = rounds.abandon(_root(), force)
+    msg = (f"Abandoned round {info['round']} and went back to {info['branch']}. Its last state is tagged "
+           f"{info['tag']}" + (f" ({info['threads']} comment(s), {len(info['files'])} edited file(s))" if
+                               info["threads"] or info["files"] else "")
+           + f"; `git checkout -b review/{info['round']} {info['tag']}` brings it back.")
+    if info["drafts"]:
+        msg += f"\nIts {info['drafts']} draft(s) stay in .scrivmark/{info['round']}/ and come back with it."
+    if info["on_origin"]:
+        msg += (f"\nThe branch is still on origin; `git push origin --delete review/{info['round']}` removes it "
+                "(and closes its pull request, if any).")
+    _emit(info, as_json, msg)
 
 
 @app.command()
@@ -291,7 +322,8 @@ def return_(push: Annotated[bool, typer.Option(help="Push the round to origin if
     """Hand the review back to the author (reviewer). After the authors have
     responded, send the round back to them for another turn."""
     if dry_run:
-        _preview("return", rounds.preflight(_root(), statement=statement, push=push, step="return"), as_json)
+        _preview("return", rounds.preflight(_root(), statement=statement, push=push, step="return", agent=_agent(by)),
+                 as_json)
     info = rounds.return_round(_root(), push, statement, _agent(by))
     if info.get("to") == "author":
         _emit(info, as_json, _handover_text(info))
@@ -573,7 +605,7 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14.")] = None,
             draft: Annotated[bool, typer.Option(help="A draft for the reviewer to keep or drop (agents).")] = False,
             wording: Annotated[Optional[str], typer.Option(help="With --draft: replacement text to apply if kept.")] = None,
-            by: Annotated[Optional[str], typer.Option(help="With --draft: the agent and model drafting, e.g. 'Codex (gpt-6.1-terra)'. "
+            by: Annotated[Optional[str], typer.Option(help="With --draft: the agent and model drafting, as 'Agent (model)'. "
                                                       "Default: $SCRIVMARK_AGENT.")] = None,
             dry_run: Annotated[bool, typer.Option("--dry-run", help="Check where each would land, show wording in context and "
                                                   "overlaps with other items, drafts, threads and source comments; add nothing.")] = False,
@@ -837,6 +869,14 @@ def url(as_json: Json = False):
     if u is None:
         raise ScrivError("No viewer is running for this repository. Start one with `scrivmark serve`.")
     _emit({"url": u}, as_json, u)
+
+
+@app.command()
+def stop():
+    """Stop this repository's running viewer."""
+    from .server import stop as stop_viewer
+
+    typer.echo(f"Stopped the viewer on port {stop_viewer(_root())}.")
 
 
 @app.command()

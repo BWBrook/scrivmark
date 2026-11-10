@@ -10,6 +10,42 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.7.0 (10 November 2026)
+
+From a supervisor's pass over a PhD chapter: the setup steps no longer touch
+the author's branch, a round can be abandoned, and margin cards stay level
+with their passage.
+
+- **`init` no longer commits to the author's branch.** It writes
+  `scrivmark.toml`, and `start` commits it on the round branch, so the
+  author's branch gets it only when the round is merged. Reviewing someone
+  else's repository used to leave their `main` a commit ahead of origin. With
+  no files named, `init` reuses the config an earlier round's branch carries
+  (here or on origin), so two rounds do not add conflicting configs; it warns
+  when the files you name differ. When there is no `.bib`, it reports the
+  references written out under a References heading and how many have DOIs.
+- **`scrivmark abandon`** gives up a round that has not been returned and goes
+  back to the author's branch. Its last state stays under the tag
+  `scrivmark/<round>/abandoned`; kept comments or edits need `--force`.
+- **`scrivmark stop`** stops this repository's viewer, through a request only
+  a caller holding its token can make.
+- **The statement is visible.** `start` prints the statement the author will
+  see and where it came from, and `return --dry-run` notes any agent named in
+  the round (by `--by`) that the statement leaves out. Help examples say
+  `'Agent (model)'` rather than naming a real model.
+- **Overlaps say what will happen.** In `comment --from ... --dry-run`, an item
+  with wording that overlaps a thread or draft now says whether that thread
+  stays anchored after the edit, or that both propose wording and keep all
+  applies only the first.
+- **Margin cards fold.** Comment and draft cards show their first sentence
+  until clicked; "+N replies" or "more" opens one. The active card (clicked,
+  or reached by clicking its highlight) opens and moves level with its passage,
+  with its neighbours moving aside. The skill now asks agents to lead each
+  draft with its point, since that sentence is all a folded card shows.
+- **The skill** covers setting up a round, the statement, abandoning and
+  stopping, and says that any line-edit pass uses wording-only drafts, not
+  just a second agent's.
+
 ## 0.6.1 (8 November 2026)
 
 A sanity pass over the round lifecycle, looking for state the code relied on

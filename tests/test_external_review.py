@@ -182,19 +182,6 @@ def test_f11_metadata_change_is_pending_and_reported(repo, monkeypatch):
     assert "data-c=" not in st["html"]
 
 
-def test_f12_init_refuses_unrelated_staged_work(tmp_path, monkeypatch):
-    root = tmp_path / "r"
-    root.mkdir()
-    monkeypatch.chdir(root)
-    git(root, "init", "-q", "-b", "main")
-    (root / "paper.md").write_text("Text.\n")
-    (root / "unrelated.txt").write_text("x\n")
-    git(root, "add", "unrelated.txt")
-    with pytest.raises(ScrivError, match="staged"):
-        rounds.init(root, ["paper.md"])
-    assert not (root / "scrivmark.toml").exists()
-
-
 def test_c01_identity_round_trips_awkward_strings(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "IDENTITY", tmp_path / "id.toml")
     monkeypatch.delenv("SCRIVMARK_AS", raising=False)

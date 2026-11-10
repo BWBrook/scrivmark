@@ -128,6 +128,62 @@ def detect(root: Path) -> dict:
     return {"files": files, "bibliography": bibs, "csl": csl[0] if csl else None, "source": None}
 
 
+def from_rounds(root: Path) -> dict | None:
+    """The scrivmark.toml that the newest review branch (here or on origin)
+    adds, when the current branch has none: `init` reuses it, so rounds that
+    each carry the config merge cleanly."""
+    from . import gitutil
+
+    refs = gitutil.git(root, "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)",
+                       "refs/heads/review/", "refs/remotes/origin/review/").split()
+    for ref in refs:
+        text = gitutil.show(root, ref, CONFIG)
+        if text is None:
+            continue
+        try:
+            m = tomllib.loads(text).get("manuscript", {})
+        except tomllib.TOMLDecodeError:
+            continue
+        bib = m.get("bibliography") or []
+        return {"files": m.get("files") or [], "bibliography": [bib] if isinstance(bib, str) else bib,
+                "csl": m.get("csl"), "source": f"{CONFIG} on {ref}", "text": text}
+    return None
+
+
+REFS_HEADING = re.compile(r"^(#{1,6})\s+(references|bibliography|literature cited|works cited|reference list)\s*(\{[^}]*\})?\s*$",
+                          re.IGNORECASE | re.MULTILINE)
+LIST_ITEM = re.compile(r"^(?=(?:[-*+]|\d+[.)])\s)", re.MULTILINE)
+DOI = re.compile(r"\b10\.\d{4,9}/\S+")
+
+
+def inline_references(root: Path, files: list[str]) -> dict:
+    """References written out in the manuscript rather than in a .bib file:
+    the paragraphs under a References heading (Markdown) or the \\bibitem
+    entries (LaTeX), and how many carry a DOI."""
+    entries: list[str] = []
+    where = []
+    for rel in files:
+        p = root / rel
+        if not p.exists():
+            continue
+        text = p.read_text(errors="replace")
+        if rel.endswith(".tex"):
+            items = re.split(r"\\bibitem\b", text)[1:]
+        else:
+            heads = list(REFS_HEADING.finditer(text))
+            if not heads:
+                continue
+            h = heads[-1]
+            end = re.compile(rf"^#{{1,{len(h.group(1))}}}\s", re.MULTILINE).search(text, h.end())
+            body = text[h.end():end.start() if end else len(text)]
+            items = [x for block in re.split(r"\n\s*\n", body) for x in LIST_ITEM.split(block)
+                     if x.strip() and not x.strip().startswith(":::")]
+        if items:
+            entries += items
+            where.append(rel)
+    return {"count": len(entries), "doi": sum(1 for e in entries if DOI.search(e)), "files": where}
+
+
 def _toml(s: str) -> str:
     """A TOML basic string. JSON's string escapes are valid TOML."""
     return json.dumps(s, ensure_ascii=False)

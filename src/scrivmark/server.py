@@ -12,6 +12,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 import webbrowser
 from importlib.resources import files
 from pathlib import Path
@@ -69,6 +70,7 @@ class Viewer:
         self.clean_cache: tuple[str, dict] | None = None
         self.lock = threading.Lock()
         self.listeners: set[asyncio.Queue] = set()
+        self.server: uvicorn.Server | None = None
 
     # ------------------------------------------------------------ state
 
@@ -491,6 +493,15 @@ def build_app(viewer: Viewer) -> Starlette:
             return JSONResponse(review.apply_ask(rv, item["id"], b.get("rev")))
         return JSONResponse(review.update_ask(rv, item["id"], done=bool(b.get("done")), expect=b.get("rev")))
 
+    async def stop(request: Request):
+        """`scrivmark stop`: the token in a header, never the cookie, so only a
+        caller that read viewer.json (not a page in a browser) can stop it."""
+        if not (local_host(request) and request.headers.get("x-scrivmark") == viewer.token):
+            return JSONResponse({"error": "Not authorised."}, status_code=403)
+        if viewer.server:
+            viewer.server.should_exit = True
+        return JSONResponse({"stopping": True})
+
     routes = [
         Route("/", index),
         Route("/read", reading),
@@ -516,6 +527,7 @@ def build_app(viewer: Viewer) -> Starlette:
         Route("/api/selection", guard(selection, True), methods=["POST"]),
         Route("/api/ask", guard(ask, True), methods=["POST"]),
         Route("/api/ask/update", guard(ask_update, True), methods=["POST"]),
+        Route("/api/stop", stop, methods=["POST"]),
     ]
 
     @asynccontextmanager
@@ -592,8 +604,33 @@ def run(root: Path, port: int = 0, open_browser: bool = False) -> bool:
     if open_browser:
         webbrowser.open(url)
     # The live-update streams never end by themselves, so stopping waits for them only briefly.
-    uvicorn.run(build_app(viewer), host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=1)
+    viewer.server = uvicorn.Server(uvicorn.Config(build_app(viewer), host="127.0.0.1", port=port, log_level="warning",
+                                                  timeout_graceful_shutdown=1))
+    viewer.server.run()
     return True
+
+
+def stop(root: Path, wait: float = 5.0) -> int:
+    """Ask this repository's running viewer to stop, and wait until its port
+    is free. Returns the port."""
+    import urllib.request
+
+    if running_url(root) is None:
+        raise ScrivError("No viewer is running for this repository.")
+    saved = read_json(viewer_file(root), {})
+    req = urllib.request.Request(f"http://127.0.0.1:{saved['port']}/api/stop", method="POST", data=b"",
+                                 headers={"x-scrivmark": saved["token"]})
+    try:
+        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=5).close()
+    except OSError as e:
+        raise ScrivError(f"The viewer on port {saved['port']} did not accept the request to stop ({e}). "
+                         f"Stop it with Ctrl-C where it runs, or end process {saved.get('pid')}.") from e
+    deadline = time.monotonic() + wait
+    while not _port_free(saved["port"]):
+        if time.monotonic() > deadline:
+            raise ScrivError(f"The viewer on port {saved['port']} is still shutting down; check again shortly.")
+        time.sleep(0.1)
+    return saved["port"]
 
 
 def running_url(root: Path) -> str | None:

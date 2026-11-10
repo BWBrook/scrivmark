@@ -73,8 +73,15 @@ cumulative cognitive bandwidth for the student/receiver … KISS principle."
 
 **Manuscript.** An ordered list of Markdown or Quarto source files, plus a
 bibliography, CSL style and resource paths, declared in `scrivmark.toml` at the
-repo root. `scrivmark init` writes it, detecting a makedoc profile or
-`_quarto.yml`.
+repo root. `scrivmark init` writes it, detecting a makedoc profile or LaTeX
+documents, or reusing the config the newest `review/*` branch carries. It does
+not commit: `start` commits it (and the `.gitignore` line) with the round
+record on the round branch, so a reviewer never moves the author's branch in a
+repository they do not own, and the config reaches the author's branch when
+the round is merged. It counts as one of scrivmark's own files (`is_managed`),
+so it never shows as a change. A round not yet returned can be abandoned: its
+last state is committed and tagged `scrivmark/<id>/abandoned`, the branch is
+deleted, and the id is not reused.
 
 **Round.** One reviewer's review of one version of the manuscript:
 
@@ -422,6 +429,10 @@ unsaved source edit is restored only against the file revision it was made on.
 
 - Threads beside their anchors; drafts with keep, edit and drop in reviewer
   mode; orphans at the top with their candidates.
+- Thread and draft cards fold to their first sentence; a fold button (or
+  activating the card) opens one. The active card is laid out level with its
+  anchor and the cards above it give way upwards, as far as the top of the
+  margin allows; the cards below follow without overlapping.
 - **Select to comment.** Rendered text is tagged as source-backed or generated
   (citation text, numbers, outputs). Selections in source-backed text map to
   source by alignment within the block; selections touching generated text

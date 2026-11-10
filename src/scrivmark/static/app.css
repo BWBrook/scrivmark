@@ -297,3 +297,11 @@ input.reason { flex: 1 1 10em; min-width: 0; font: inherit; font-size: 12px; pad
 .qextra button.small { font-size: 12px; padding: 1px 8px; }
 .qextra input.reason { display: block; width: 100%; box-sizing: border-box; }
 body.waiting #doc .scrv-b:hover { cursor: default; }
+
+.card .short { display: none; }
+.card.collapsed .body, .card.collapsed .msg ~ .msg, .card.collapsed .acts, .card.collapsed .wording,
+.card.collapsed .resolvedby, .card.collapsed .msgedit { display: none; }
+.card.collapsed .short { display: inline; }
+.card .foldbtn { display: block; margin-top: 4px; padding: 0 6px; font-size: 12px; background: none; border: 0;
+  color: var(--accent); cursor: pointer; }
+.card .foldbtn:hover { text-decoration: underline; }

@@ -20,7 +20,7 @@ NEIGHBOURHOOD = 40
 
 
 def is_managed(path: str) -> bool:
-    return path.startswith((record.REVIEWS + "/", ".scrivmark/")) or path == ".gitignore"
+    return path.startswith((record.REVIEWS + "/", ".scrivmark/")) or path in (".gitignore", config.CONFIG)
 
 
 @dataclass
@@ -618,7 +618,7 @@ def _lost_twin(old: str, a: dict, pr) -> bool:
     return False
 
 
-def resolve(rv: Review, a: dict) -> dict:
+def resolve(rv: Review, a: dict, cur: str | None = None) -> dict:
     """Locate an anchor in the current text.
 
     ok, exact   the passage is where it was, unchanged;
@@ -631,8 +631,10 @@ def resolve(rv: Review, a: dict) -> dict:
                 its full original context;
     orphan      none of these holds. A lookalike passage elsewhere is listed
                 as a candidate, never adopted.
+
+    `cur` stands in for the file's current text, to ask what an edit would do.
     """
-    cur = rv.text(a["file"])
+    cur = rv.text(a["file"]) if cur is None else cur
     if cur is None:
         return {"state": "orphan", "candidates": []}
     old = _text_at(rv, a["file"], a["rev"])
@@ -878,6 +880,27 @@ def rebase_anchors(rv: Review, commit: str, snapshots_only: bool = False) -> lis
 # ---------------------------------------------------------------- drafts
 
 
+def agents(rv: Review, also: str | None = None) -> list[str]:
+    """Every agent named in the round so far: drafting, commenting, deciding
+    or handing over (plus `also`), in order of first appearance."""
+    rec = rv.rec
+    names = [h.get("agent") for h in rec["round"].get("handovers") or []]
+    names += [c.get("agent") for c in rec["changes"]]
+    names += [e.get("by") for e in rec.get("drafted_edits") or []]
+    for t in rec["threads"]:
+        names.append((t.get("resolved_by") or {}).get("agent"))
+        for m in t["messages"]:
+            names += [m.get("agent"), m.get("drafted_by")]
+    names += [d.get("by") for d in drafts(rv)] + [also]
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def unnamed_agents(rv: Review, statement: str, also: str | None = None) -> list[str]:
+    """Agents in the round that the statement does not mention by name."""
+    flat = " ".join(statement.split()).casefold()
+    return [a for a in agents(rv, also) if " ".join(a.split()).casefold() not in flat]
+
+
 def drafts(rv: Review) -> list[dict]:
     return [dict(d, where=resolve(rv, d["anchor"])) for d in read_json(rv.root / rv.drafts_rel, [])]
 
@@ -911,32 +934,55 @@ def _context(text: str, s: int, e: int, wording: str | None, span: int = 90) -> 
     return out
 
 
+def _fate(rv: Review, anchor: dict, text: str, s: int, e: int, wording: str) -> str:
+    """What applying `wording` over [s, e) would do to another anchor there."""
+    w = resolve(rv, anchor, text[:s] + wording + text[e:])
+    if w["state"] != "ok":
+        return "would lose its passage"
+    return {"exact": "stays anchored, unchanged", "moved": "stays anchored",
+            "edited": "stays anchored, on the edited text", "removed": "stays anchored where the text was removed"}[w["how"]]
+
+
 def preflight(rv: Review, items: list[dict]) -> list[dict]:
     """For a batch about to be added: where each item lands, its wording in
     context, and what it overlaps (other items, drafts, threads, comments in
-    the source). Overlaps are advisory."""
+    the source). Overlaps are advisory; for an item with wording, each overlap
+    says what keeping it would do to that thread or draft."""
     taken = []
     for d in drafts(rv):
         if d["where"]["state"] == "ok":
-            taken.append((d["anchor"]["file"], *d["where"]["range"], f"draft {d['id']}" + (f" by {d['by']}" if d.get("by") else "")))
+            taken.append((d["anchor"]["file"], *d["where"]["range"],
+                          f"draft {d['id']}" + (f" by {d['by']}" if d.get("by") else ""), d))
     for t in threads(rv):
         if t["where"]["state"] == "ok" and t["status"] == "open":
-            taken.append((t["anchor"]["file"], *t["where"]["range"], f"thread {t['id']}"))
+            taken.append((t["anchor"]["file"], *t["where"]["range"], f"thread {t['id']}", t))
     for rel in rv.ms.files:
         for m in HTML_COMMENT.finditer(rv.text(rel) or ""):
-            taken.append((rel, m.start(), m.end(), "a comment in the source"))
+            taken.append((rel, m.start(), m.end(), "a comment in the source", None))
     out = []
     spans = []
     for n, i in enumerate(items, 1):
         a = i["anchor"]
         s, e = a["range"]
         text = rv.text(a["file"]) or ""
-        hits = [label for f, x, y, label in taken if f == a["file"] and s < y and x < e]
-        hits += [f"item {m}" for m, (f, x, y) in spans if f == a["file"] and s < y and x < e]
-        spans.append((n, (a["file"], s, e)))
+        wording = i.get("wording")
+        hits = []
+        for f, x, y, label, other in taken:
+            if f != a["file"] or not (s < y and x < e):
+                continue
+            if wording is not None and other is not None:
+                fate = ("both propose wording; keep all applies only the first" if other.get("wording") is not None
+                        else _fate(rv, other["anchor"], text, s, e, wording))
+                label = f"{label} ({fate})"
+            hits.append(label)
+        for m, (f, x, y, w) in spans:
+            if f == a["file"] and s < y and x < e:
+                hits.append(f"item {m}" + (" (both propose wording; keep all applies only the first)"
+                                           if wording is not None and w is not None else ""))
+        spans.append((n, (a["file"], s, e, wording)))
         out.append({"item": n, "file": a["file"], "line": text.count("\n", 0, s) + 1, "exact": a["exact"],
-                    "draft": bool(i.get("draft")), "by": i.get("by"), "wording": i.get("wording"),
-                    **_context(text, s, e, i.get("wording")), "overlaps": hits})
+                    "draft": bool(i.get("draft")), "by": i.get("by"), "wording": wording,
+                    **_context(text, s, e, wording), "overlaps": hits})
     return out
 
 

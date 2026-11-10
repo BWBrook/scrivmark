@@ -284,12 +284,13 @@ def test_keep_all_applies_every_draft_and_leaves_conflicts(repo):
     assert rv.rec["drafted_edits"][0]["by"] == "Codex"
 
 
-def test_batch_dry_run_reports_failures_overlaps_and_wording_in_context(repo, tmp_path):
+def test_batch_dry_run_reports_failures_overlaps_their_fate_and_wording_in_context(repo, tmp_path):
     from typer.testing import CliRunner
 
     from scrivmark.cli import app
     rv = rounds.start(repo)
     review.add_draft(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "Overclaim?", None, by="Claude")
+    review.add_draft(rv, review.anchor_quote(rv, "paper.md", "should should"), "", "should", by="Claude")
     f = tmp_path / "b.json"
     f.write_text(json.dumps([
         {"file": "paper.md", "quote": "thermal benefits", "wording": "thermal effects"},
@@ -301,9 +302,11 @@ def test_batch_dry_run_reports_failures_overlaps_and_wording_in_context(repo, tm
     rep = json.loads(r.output)
     assert [e["item"] for e in rep["errors"]] == [3]
     first, second = rep["checked"]
-    assert first["overlaps"] == ["draft " + review.drafts(rv)[0]["id"] + " by Claude"] and second["overlaps"] == []
+    d1, d2 = (d["id"] for d in review.drafts(rv))
+    assert first["overlaps"] == [f"draft {d1} by Claude (stays anchored, on the edited text)"]
+    assert second["overlaps"] == [f"draft {d2} by Claude (both propose wording; keep all applies only the first)"]
     assert "«should»" in second["after"] and "«should should»" in second["before"]
-    assert len(review.drafts(review.active(repo))) == 1
+    assert len(review.drafts(review.active(repo))) == 2
 
 
 def test_revise_keeps_author_and_history_and_summary_is_compact(repo, tmp_path):

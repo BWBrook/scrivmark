@@ -25,7 +25,8 @@ def _require_clean(root: Path, what: str) -> None:
 def _new_id(root: Path, initials: str) -> str:
     stem = f"{date.today().isoformat()}-{initials.lower()}"
     rid, n = stem, 1
-    while gitutil.ok(root, "rev-parse", "--verify", f"refs/heads/{BRANCH_PREFIX}{rid}") or record.path(root, rid).exists():
+    while gitutil.ok(root, "rev-parse", "--verify", f"refs/heads/{BRANCH_PREFIX}{rid}") or record.path(root, rid).exists() \
+            or gitutil.ok(root, "rev-parse", "--verify", "-q", f"refs/tags/{TAG.format(id=rid, which='abandoned')}"):
         n += 1
         rid = f"{stem}-{n}"
     return rid
@@ -66,7 +67,14 @@ def _on_github(root: Path) -> bool:
 
 
 def init(root: Path, files: list[str] | None = None, write: bool = True) -> dict:
-    found = config.detect(root)
+    """Write scrivmark.toml (and the .gitignore line) without committing them:
+    `start` commits them on the round branch, so the author's branch only gets
+    them when a round is merged. With no files named, a config that an earlier
+    round's branch already carries is reused as it is."""
+    if gitutil.has_remote(root):
+        gitutil.git(root, "fetch", "-q", "origin", check=False)
+    earlier = None if (root / config.CONFIG).exists() else config.from_rounds(root)
+    found = earlier if earlier and not files else config.detect(root)
     chosen = files or found["files"]
     if not chosen:
         raise ScrivError("No Markdown, Quarto or LaTeX files found; name them: `scrivmark init paper.md`")
@@ -78,15 +86,42 @@ def init(root: Path, files: list[str] | None = None, write: bool = True) -> dict
     missing = [f for f in chosen if not (root / f).exists()]
     if missing:
         raise ScrivError(f"These files do not exist: {', '.join(missing)}")
+    info = {"files": chosen, "bibliography": found["bibliography"], "csl": found["csl"], "source": found["source"],
+            "inline_references": config.inline_references(root, chosen) if not found["bibliography"] else None,
+            "written": False}
+    if earlier and files and earlier["files"] != chosen:
+        info["differs_from"] = earlier["source"]
     if not write:
-        return {"files": chosen, "bibliography": found["bibliography"], "csl": found["csl"],
-                "source": found["source"], "written": False}
-    if not gitutil.ok(root, "diff", "--cached", "--quiet"):
-        raise ScrivError("Other changes are staged in git. Commit or unstage them first, so the setup commit holds only scrivmark's files.")
-    config.write(root, chosen, found["bibliography"], found["csl"])
+        return info
+    if found is earlier:
+        (root / config.CONFIG).write_text(earlier["text"])
+    else:
+        config.write(root, chosen, found["bibliography"], found["csl"])
     ensure_ignored(root)
-    _commit(root, "scrivmark: add manuscript config", [config.CONFIG, ".gitignore"])
-    return {"files": chosen, "bibliography": found["bibliography"], "csl": found["csl"], "written": True}
+    return {**info, "written": True}
+
+
+def _yield_config(root: Path, ref: str) -> None:
+    """Make way for a round branch that carries scrivmark.toml: git will not
+    check it out over an uncommitted copy, even an identical one."""
+    local = root / config.CONFIG
+    if not local.exists() or gitutil.ok(root, "ls-files", "--error-unmatch", "--", config.CONFIG):
+        return
+    theirs = gitutil.show(root, ref, config.CONFIG)
+    if theirs is None:
+        return
+    if local.read_text() != theirs:
+        raise ScrivError(f"Your uncommitted {config.CONFIG} differs from the one {ref} carries. Move it aside "
+                         "(or delete it) and open the round again; the round brings its own.")
+    local.unlink()
+
+
+def _restore_config(root: Path, ref: str) -> None:
+    """After leaving a round branch for one without the config, put the round's
+    scrivmark.toml back (uncommitted), so the next round can start."""
+    if not (root / config.CONFIG).exists() and (text := gitutil.show(root, ref, config.CONFIG)) is not None:
+        (root / config.CONFIG).write_text(text)
+    ensure_ignored(root)
 
 
 def start(root: Path, author_branch: str | None = None, statement: str | None = None,
@@ -112,7 +147,9 @@ def start(root: Path, author_branch: str | None = None, statement: str | None = 
     stmt = statement or config.default_statement(me)
     rec = record.blank(rid, {"name": me.name, "initials": me.initials}, branch, base, stmt)
     record.save(root, rec)
-    _commit(root, f"scrivmark: start review round {rid}", [str(record.path(root, rid).relative_to(root))])
+    _commit(root, f"scrivmark: start review round {rid}",
+            [str(record.path(root, rid).relative_to(root)), *(f for f in (config.CONFIG, ".gitignore")
+                                                              if (root / f).exists())])
     return Review(root, rec, ms)
 
 
@@ -130,7 +167,41 @@ def request(root: Path, reviewer_name: str, reviewer_initials: str, github_user:
                 cwd=root, check=False,
             )
     gitutil.git(root, "checkout", "-q", rv.rec["round"]["author_branch"])
+    _restore_config(root, f"{BRANCH_PREFIX}{rv.id}")
     return rv
+
+
+def abandon(root: Path, force: bool = False) -> dict:
+    """Give up a round that has not been returned, and go back to the author
+    branch. Its last state is committed and tagged scrivmark/<id>/abandoned,
+    so nothing is lost; kept comments or edits need `force`."""
+    with transaction(root):
+        rv = active(root)
+        if rv.status != "open":
+            raise ScrivError(f"Round {rv.id} is {rv.status}: the authors have it, so abandoning it here would leave "
+                             "them a round nobody finishes. Close it instead (`scrivmark close --force` is recorded).")
+        require_turn(rv)
+        rnd = rv.rec["round"]
+        edited = sorted({e[1] for e in gitutil.name_status(root, rnd["base"], _working_tree(root))
+                         if not is_managed(e[1])})
+        kept, left = len(rv.rec["threads"]), len(drafts(rv))
+        if (kept or edited) and not force:
+            raise ScrivError(f"Round {rv.id} holds {kept} kept comment(s) and edits to {len(edited)} file(s). "
+                             "`scrivmark abandon --force` sets them aside (tagged, so git can bring them back).")
+        _commit_work(root, f"scrivmark: abandon review round {rv.id}")
+        _commit(root, f"scrivmark: abandon review round {rv.id}", [rv.record_rel])
+        tag = TAG.format(id=rv.id, which="abandoned")
+        tip = gitutil.rev(root, "HEAD")
+        if not gitutil.ok(root, "rev-parse", "--verify", "-q", f"refs/tags/{tag}"):
+            gitutil.git(root, "tag", tag, tip)
+        elif gitutil.rev(root, f"refs/tags/{tag}^{{commit}}") != tip:
+            raise ScrivError(f"Tag {tag} already names another commit; check it with git before abandoning again.")
+        gitutil.git(root, "checkout", "-q", rnd["author_branch"])
+        _restore_config(root, tip)
+        gitutil.git(root, "branch", "-q", "-D", f"{BRANCH_PREFIX}{rv.id}")
+    return {"round": rv.id, "tag": tag, "commit": tip, "branch": rnd["author_branch"], "threads": kept,
+            "drafts": left, "files": edited,
+            "on_origin": gitutil.ok(root, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{BRANCH_PREFIX}{rv.id}")}
 
 
 def return_round(root: Path, push: bool = True, statement: str | None = None, agent: str | None = None) -> dict:
@@ -372,6 +443,8 @@ def open_round(root: Path, round_id: str, claim: bool = False) -> dict:
         gitutil.git(root, "fetch", "-q", "--tags", "origin", check=False)
     if gitutil.current_branch(root) != branch:
         _require_clean(root, "open a round")
+        _yield_config(root, branch if gitutil.ok(root, "rev-parse", "--verify", f"refs/heads/{branch}")
+                      else f"origin/{branch}")
         if gitutil.ok(root, "rev-parse", "--verify", f"refs/heads/{branch}"):
             gitutil.git(root, "checkout", "-q", branch)
         elif gitutil.ok(root, "rev-parse", "--verify", f"origin/{branch}"):
@@ -564,7 +637,7 @@ def _ids(xs: list[str]) -> str:
 
 
 def preflight(root: Path, round_id: str | None = None, statement: str | None = None, push: bool = True,
-              force: bool = False, step: str | None = None) -> dict:
+              force: bool = False, step: str | None = None, agent: str | None = None) -> dict:
     """What the next transition of the round would do, with the options the
     command would be given. It changes no file, ref, tag or index; computing
     the change count may leave a few unreferenced git objects, which git
@@ -580,7 +653,7 @@ def preflight(root: Path, round_id: str | None = None, statement: str | None = N
         return {**base, "transition": None, "ready": False, "checks": [], "blockers": [],
                 "notes": ["closed"], "will": []}
     if rv.status == "open":
-        out = _preflight_return(root, rv, statement, push)
+        out = _preflight_return(root, rv, statement, push, agent)
     elif rv.status == "returned" and step == "respond":
         out = _preflight_respond(root, rv, push)
     elif rv.status == "responded" and step == "return":
@@ -599,7 +672,8 @@ def preflight(root: Path, round_id: str | None = None, statement: str | None = N
     return {**base, **out}
 
 
-def _preflight_return(root: Path, rv: Review, restated: str | None = None, push: bool = True) -> dict:
+def _preflight_return(root: Path, rv: Review, restated: str | None = None, push: bool = True,
+                      agent: str | None = None) -> dict:
     rnd = rv.rec["round"]
     ms = rv.ms
     checks, notes = [], []
@@ -615,6 +689,9 @@ def _preflight_return(root: Path, rv: Review, restated: str | None = None, push:
     statement = rnd["statement"] if restated is None else restated
     checks.append(_check("statement", bool(statement.strip()), "Statement is set" if statement.strip()
                          else "The statement is empty"))
+    if unnamed := review.unnamed_agents(rv, statement, agent):
+        notes.append(f"The statement does not name {', '.join(unnamed)}, who worked on this round. If it should, "
+                     "add --statement '...' to restate it (it cannot change after the return)")
     tree = _working_tree(root)
     entries = [e for e in gitutil.name_status(root, rnd["base"], tree) if not is_managed(e[1])]
     files = sorted({e[1] for e in entries})

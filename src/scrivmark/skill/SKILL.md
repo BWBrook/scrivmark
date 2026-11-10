@@ -39,9 +39,32 @@ address and exits. If 8765 is taken by another program, the default moves to
 the next free port and says so. For the desktop apps' browser pane, a
 `.claude/launch.json` entry running `scrivmark serve` with `"port": 8765` and
 `"autoPort": false` is all it needs.
-`scrivmark url` prints the full address of the running viewer. After a CLI
+`scrivmark url` prints the full address of the running viewer, and
+`scrivmark stop` stops it. After a CLI
 change, the page updates within about a second; wait that long before reading
 it back.
+
+## Setting up a round
+
+- `scrivmark init FILE...` writes `scrivmark.toml` (files in reading order)
+  but does not commit it: `scrivmark start` commits it on the round branch,
+  so the author's branch gets it only when the round is merged. Never commit
+  it to the author's branch yourself in a repository you do not own. With no
+  files named, `init` reuses the config an earlier round's branch carries
+  (here or on origin), so both rounds merge cleanly; it warns when the files
+  you name differ from that one. When there is no `.bib`, it counts the
+  references written out under a References heading and how many have DOIs.
+- `start` prints the statement shown to the author ("Reviewed by ... working
+  with ..."), taken from `scrivmark whoami` unless `--statement` is given.
+  Check that it names the agents and models actually at work. If it does not,
+  `scrivmark return --statement "..."` replaces it at the return, and
+  `return --dry-run` notes any agent named in the round (by `--by`) that the
+  statement leaves out. It cannot change after the return.
+- To restart or drop a round that has not been returned,
+  `scrivmark abandon` goes back to the author's branch, keeping the round's
+  last state under the tag `scrivmark/<round>/abandoned`. It refuses while
+  the round holds kept comments or edits; `--force` sets them aside anyway,
+  so ask the human first. Never clean up a round by hand with git.
 
 ## Where things stand
 
@@ -82,7 +105,9 @@ the side's initials, so the record says which agent did what.
 
   Quote the source as written; whitespace and line breaks need not match. If
   the quote is ambiguous, add `--prefix` or `--suffix`. Make one point per
-  draft, and keep each to a sentence or three. The reviewer keeps drafts as
+  draft and lead with it: the viewer shows only a card's first sentence until
+  it is opened, so that sentence must carry the point on its own. Add a
+  sentence or two of support only where it is needed. The reviewer keeps drafts as
   their own (wording becomes a real edit) or drops them, so write what you
   would be happy for them to sign. Do not put your name or labels in the
   text; instead pass `--by "Agent (model)"`, e.g. `--by "Codex (gpt-6.1-terra)"`
@@ -102,7 +127,10 @@ the side's initials, so the record says which agent did what.
   `scrivmark comment --from drafts.json --draft --dry-run`: it reports every
   item that would fail, shows each wording in its sentence (`before` and
   `after`, changed part in «»), and lists overlaps with other items, drafts,
-  open threads and source comments. Overlaps are advisory. Read the `after`
+  open threads and source comments. Overlaps are advisory; for an item with
+  wording, each overlap says what keeping it would do to that thread or
+  draft: whether it stays anchored or would lose its passage, and, where
+  both propose wording, that keep all applies only the first. Read the `after`
   lines for edits that fit alone but jar in context. When adding, `--json
   --summary` returns only the count, ids, authors and new revision.
 - **Revising a draft.** `scrivmark revise DRAFT --wording "..."` (or `--body`,
@@ -116,9 +144,9 @@ the side's initials, so the record says which agent did what.
   messages until the round is returned, the author's until it is closed. Edit
   the human's own comments only when they ask you to. In the viewer, the same
   edit is the Edit button on the message.
-- **Line edits from a second agent.** When another agent has already edited
-  the files in this round, propose your edits as drafts with `wording` and an
-  empty `body` instead of editing files: each shows as "Line edit, no
+- **Line edits.** Propose line edits as drafts with `wording` and an empty
+  `body`, not as edits to the files, whether you are the only agent or
+  another has already edited the files in this round: each shows as "Line edit, no
   comment", and keeping it applies the edit as a tracked change, recorded as
   drafted by you. Quote the smallest passage that contains the change (a
   phrase or sentence), so each edit can be kept or dropped on its own. Add a

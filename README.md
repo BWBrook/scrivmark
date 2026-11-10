@@ -108,9 +108,9 @@ scrivmark skill --install
 
 | Who | Command | What happens |
 |---|---|---|
-| Either | `scrivmark init` | In the manuscript's repository, once: finds the sources in reading order (from makedoc settings, LaTeX documents, or the files you name), the bibliography and the citation style, and commits a small `scrivmark.toml`. |
-| Reviewer | `scrivmark start` | Opens a review round on its own branch. |
-| Reviewer | `scrivmark serve` | Starts the viewer and prints its address: read, edit, comment, ask. |
+| Either | `scrivmark init` | In the manuscript's repository, once: finds the sources in reading order (from makedoc settings, LaTeX documents, or the files you name), the bibliography and the citation style, and writes a small `scrivmark.toml`, which `start` commits on the round branch (so the author's branch gets it only with the round). |
+| Reviewer | `scrivmark start` | Opens a review round on its own branch. `scrivmark abandon` gives one up before it is returned. |
+| Reviewer | `scrivmark serve` | Starts the viewer and prints its address: read, edit, comment, ask. `scrivmark stop` stops it. |
 | Reviewer | `scrivmark return` | Hands the review back: commits the edits and comments, pushes the branch and opens a pull request on GitHub. |
 | Author | `scrivmark open <round>` | Checks out the round, in the same viewer: accept, reject, reply, resolve, edit. |
 | Author | `scrivmark close` | Merges the round into the author's branch, keeping the record. |
@@ -128,7 +128,7 @@ you review it as their supervisor or colleague. You read, edit and comment in
 the viewer as usual; the agents work from the command line, where every
 change and comment is structured data.
 
-1. Ask the agents to set it up: `scrivmark init`, commit, and keep the
+1. Ask the agents to set it up: `scrivmark init`, commit `scrivmark.toml`, and keep the
    manuscript text still while you review (code and analysis can carry on).
 2. Review from your own clone: `scrivmark start`, `serve`, then `return`.
 3. The agents open the round as the authors (`scrivmark open <round> --as
