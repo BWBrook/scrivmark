@@ -63,6 +63,12 @@ BIB = """@article{royle2003,
 }
 """
 
+from scrivmark import figures
+
+needs_tikz = pytest.mark.skipif(
+    not (shutil.which("pdflatex") and shutil.which("pdftocairo") and figures._sandbox_works()),
+    reason="needs pdflatex, pdftocairo and a working sandbox (sandbox-exec or bwrap)")
+
 
 @pytest.fixture
 def texrepo(tmp_path, monkeypatch):
@@ -165,7 +171,7 @@ def test_comment_from_the_page_lands_on_latex_source(texrepo):
     assert t["anchor"]["exact"] == r"request \USD{5,000} for camera"
 
 
-@pytest.mark.skipif(not (shutil.which("pdflatex") and shutil.which("pdftocairo")), reason="needs pdflatex and pdftocairo")
+@needs_tikz
 def test_tikz_and_pdf_figures_are_drawn_for_the_browser(texrepo):
     rounds.start(texrepo)
     viewer = Viewer(texrepo)
@@ -239,12 +245,8 @@ def test_figure_lookup_stays_inside_the_repository(texrepo):
     assert outside.read_bytes() not in r.content
 
 
-@pytest.mark.skipif(not (shutil.which("pdflatex") and shutil.which("pdftocairo")), reason="needs pdflatex and pdftocairo")
+@needs_tikz
 def test_tikz_cannot_read_files_and_tolerates_comments(texrepo, tmp_path):
-    from scrivmark import figures
-
-    if figures.sandbox(tmp_path) is None:
-        pytest.skip("no working sandbox-exec or bwrap here, so TikZ reads are not confined")
     secret = tmp_path / "secret.tex"
     secret.write_text("TOPSECRET")
     rounds.start(texrepo)

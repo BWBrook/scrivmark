@@ -10,6 +10,50 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.8.0 (14 November 2026)
+
+From a full practice round run by a new maintainer (Claude Fable 5.2), and an
+independent code review by Codex.
+
+- **A rewritten sentence is one change.** Edits separated only by a few
+  unchanged words inside one clause are now a single tracked change, so a
+  rewrite is accepted or rejected whole. It used to be cut into a fragment
+  either side of each surviving word, each decided separately, and rejecting
+  one of them alone could leave nonsense. Small separate corrections stay
+  separate. Rounds already returned keep the changes they recorded.
+- **TikZ pictures compile in a sandbox.** Compiling a picture from a manuscript
+  you are reviewing could read any file you can: TeX Live 2026 turned off the
+  setting scrivmark relied on (`openin_any`). The compile now runs under
+  `sandbox-exec` on macOS or `bubblewrap` on Linux, with no network and no
+  access to home directories, other volumes or temporary files. Without a
+  working sandbox, pictures show as placeholders: on Linux, install
+  `bubblewrap` (`scrivmark doctor` says whether it is working).
+- **The viewer fits a narrow pane.** The top bar no longer wraps beside a
+  chat, the help box scrolls instead of running off the top, and
+  <kbd>j</kbd>/<kbd>k</kbd> stop once at a replacement rather than at its
+  deleted and inserted halves.
+- `scrivmark status` names the command that commits the round in each phase
+  (it always said `return`).
+- **Integrity fixes from the code review**, each with a test that fails on
+  0.7.0:
+  - an edit box could save over a change made while it was opening, or into
+    a different round;
+  - an interrupted write could be finished on the wrong branch;
+  - a draft's wording could land on a similar passage when its own was
+    deleted and the other renamed (it now asks to be re-attached);
+  - a draft being edited in the viewer could be kept over a version an agent
+    had revised meanwhile;
+  - a decision box left open across a change of round could decide the wrong
+    change.
+- `keep`, `drop` and `resolve` with several ids now report what was done
+  before a refusal (`done`, `failed`, `remaining`, `rev`), as `accept` and
+  `reject` do, and `comment --lines` out of range is a refusal, not a crash.
+- The full list is in
+  [docs/audits/2026-11-14-handover-review.md](docs/audits/2026-11-14-handover-review.md).
+- **For agents:** the guide has a new first section, "What changed for
+  agents", listing changes that can break a habit or a script, with what to do
+  instead. Run `scrivmark skill --install` after updating.
+
 ## 0.7.0 (10 November 2026)
 
 From a supervisor's pass over a PhD chapter: the setup steps no longer touch

@@ -618,6 +618,28 @@ def _lost_twin(old: str, a: dict, pr) -> bool:
     return False
 
 
+def _rival_lost(old: str, a: dict, pr) -> bool:
+    """Another copy of the passage, in the same changed stretch (no unchanged
+    line between them), did not survive. With the passage's own context
+    changed too, the diff matched the survivor to one copy by position alone:
+    "North: high / South: high" cut to "East: high" could be either."""
+    s, e = a["range"]
+    for i in _occurrences(old, a["exact"]):
+        if i == s or pr.range(i, i + e - s) is not None:
+            continue
+        lo, hi = sorted((s, i))
+        between = old[old.find("\n", lo) + 1 : old.rfind("\n", 0, hi) + 1] if "\n" in old[lo:hi] else ""
+        at = old.find("\n", lo) + 1
+        kept = False
+        for line in between.splitlines(keepends=True):
+            if line.strip() and pr.range(at, at + len(line)) is not None:
+                kept = True
+            at += len(line)
+        if not kept:
+            return True
+    return False
+
+
 def resolve(rv: Review, a: dict, cur: str | None = None) -> dict:
     """Locate an anchor in the current text.
 
@@ -648,6 +670,8 @@ def resolve(rv: Review, a: dict, cur: str | None = None) -> dict:
             return unsure
         r = pr.range(s, e)
         if r and cur[r[0] : r[1]] == a["exact"]:
+            if _context_score(cur, r[0], a) < full and _rival_lost(old, a, pr):
+                return unsure
             return {"state": "ok", "how": "exact", "range": list(r)}
         left = pr.range(max(0, s - 16), s)
         right = pr.range(e, min(len(old), e + 16))

@@ -28,7 +28,7 @@ from . import config, figures, gitutil, latex, record, render, review, rounds
 from .blocks import guarded_segments, line_of
 from .errors import Conflict, ScrivError, StaleRevision
 from .selection import PLACEHOLDER, _plain, map_selection
-from .state import atomic_write, local_dir, read_json, revision
+from .state import atomic_write, local_dir, read_json, revision, revision_of
 
 STATIC = files("scrivmark") / "static"
 COOKIE = "scrivmark"
@@ -444,13 +444,19 @@ def build_app(viewer: Viewer) -> Starlette:
         if rel not in ms.sources:
             raise ScrivError(f"{rel} is not a manuscript file")
         first, last = (int(x) for x in request.query_params["lines"].split("-"))
-        lines = (viewer.root / rel).read_text().splitlines(keepends=True)
+        # one read gives both the text and its revision, so a save in between cannot pair old text with a new revision
+        data = (viewer.root / rel).read_bytes()
+        lines = data.decode().splitlines(keepends=True)
         text = "".join(lines[first - 1 : last]).rstrip("\n")
+        rv = viewer.current()
         return JSONResponse({"file": rel, "first": first, "last": last, "text": text,
-                             "file_rev": revision(viewer.root, [rel])})
+                             "file_rev": revision_of({rel: data}), "round": rv.id if rv else None})
 
     def source_put(request: Request, b: dict):
         rv = viewer.need()
+        if b.get("round") != rv.id:
+            raise StaleRevision("This edit was begun in another round. Your text is still in the box; copy it, "
+                                "cancel, and edit again.")
         try:
             review.replace_lines(rv, b["file"], int(b["first"]), int(b["last"]), b["text"], b["file_rev"])
         except StaleRevision:

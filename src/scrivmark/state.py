@@ -35,11 +35,15 @@ def ensure_ignored(root: Path) -> bool:
 
 
 def revision(root: Path, paths: list[str]) -> str:
+    return revision_of({p: (root / p).read_bytes() if (root / p).exists() else None for p in paths})
+
+
+def revision_of(contents: dict[str, bytes | None]) -> str:
+    """The revision of files whose bytes are already in hand."""
     h = hashlib.sha256()
-    for p in sorted(paths):
-        f = root / p
+    for p in sorted(contents):
         h.update(p.encode())
-        h.update(f.read_bytes() if f.exists() else b"\0missing")
+        h.update(b"\0missing" if contents[p] is None else contents[p])
     return h.hexdigest()[:16]
 
 
@@ -74,6 +78,16 @@ def _on_disk(path: Path) -> str | None:
     return _digest(path.read_bytes()) if path.exists() else None
 
 
+def _head(root: Path) -> str:
+    """The branch that is checked out ("HEAD" when detached, "" outside git)."""
+    from . import gitutil
+
+    try:
+        return gitutil.git(root, "rev-parse", "--symbolic-full-name", "HEAD").strip()
+    except Exception:
+        return ""
+
+
 def recover(root: Path) -> list[str]:
     """Finish a write that was interrupted between its intent and completion.
     A file still as it was before is completed and one already written is left;
@@ -83,11 +97,13 @@ def recover(root: Path) -> list[str]:
     if not ip.exists():
         return []
     intent = json.loads(ip.read_text())
+    files = intent.get("files")
     todo, clash = [], []
-    for rel, entry in intent.items():
-        if not isinstance(entry, dict):
-            clash.append(rel)
-            continue
+    if not isinstance(files, dict) or intent.get("head") != _head(root):
+        # written by an earlier version, or on another branch: a file here that
+        # happens to match is not the file the write was for
+        clash, files = sorted(files if isinstance(files, dict) else intent), {}
+    for rel, entry in files.items():
         now = _on_disk(root / rel)
         if now == entry.get("post"):
             continue
@@ -96,9 +112,10 @@ def recover(root: Path) -> list[str]:
         kept = ip.with_name(f"intent-unfinished-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}.json")
         os.replace(ip, kept)
         raise ScrivError(f"An interrupted scrivmark write could not be finished: {', '.join(clash)} changed "
-                         f"since. Nothing was overwritten; what it was writing is kept in {kept}.")
+                         f"since, or another branch is checked out. Nothing was overwritten; what it was "
+                         f"writing is kept in {kept}.")
     for rel in todo:
-        atomic_write(root / rel, _decode(intent[rel]["data"]))
+        atomic_write(root / rel, _decode(files[rel]["data"]))
     ip.unlink()
     return todo
 
@@ -134,8 +151,8 @@ def transaction(root: Path, expect: str | None = None, watched: list[str] | None
                 raise StaleRevision(STALE)
             if writes:
                 ip = _intent_path(root)
-                atomic_write(ip, json.dumps({k: {"pre": _on_disk(root / k), "post": _digest(v), "data": _encode(v)}
-                                             for k, v in writes.items()}))
+                atomic_write(ip, json.dumps({"head": _head(root), "files": {
+                    k: {"pre": _on_disk(root / k), "post": _digest(v), "data": _encode(v)} for k, v in writes.items()}}))
                 for rel, content in writes.items():
                     atomic_write(root / rel, content)
                 ip.unlink()

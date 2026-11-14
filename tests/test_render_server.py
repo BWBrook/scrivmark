@@ -129,7 +129,7 @@ def test_reference_list_entries_can_be_commented_on_and_edited(repo):
     assert src["text"].startswith("@article{royle2003")
     r = c.post("/api/source", headers=h, json={"file": "refs.bib", "first": src["first"], "last": src["last"],
                                                "text": src["text"].replace("year={2003}", "year={2004}"),
-                                               "file_rev": src["file_rev"]})
+                                               "file_rev": src["file_rev"], "round": src["round"]})
     assert r.status_code == 200 and "year={2004}" in (repo / "refs.bib").read_text()
 
 

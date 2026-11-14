@@ -466,8 +466,8 @@ temporary directory, without shell escape, inside an operating-system sandbox
 write only there, and cannot read home directories, other volumes or
 temporary directories, apart from TeX's own trees (`figures.sandbox`). TeX's
 own `openin_any` is not relied on: TeX Live 2026 made it a no-op. Where no
-sandbox works, pictures still compile and `doctor` says reads are not
-confined.
+sandbox works, pictures are not compiled and show as placeholders; `doctor`
+says so.
 
 ## Agent interface
 

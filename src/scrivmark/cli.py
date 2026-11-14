@@ -202,8 +202,7 @@ def doctor(as_json: Json = False):
 
                 boxed = figures.sandbox(root) is not None
                 check("TikZ sandbox", boxed, "" if boxed else
-                      "none working, so a TikZ picture in a manuscript you review can read any file you can; "
-                      "install bubblewrap (bwrap)", note=True)
+                      "none working, so TikZ pictures show as placeholders; install bubblewrap (bwrap)", note=True)
         if any(f.endswith(".qmd") for f in ms.files):
             check(".qmd rendering", True, "rendered with pandoc in this version; Quarto code outputs are not shown yet")
     except ScrivError as e:
@@ -546,6 +545,25 @@ def reject(change_ids: Annotated[Optional[list[str]], typer.Argument()] = None, 
     _decide(change_ids or [], all_, "rejected", expect, as_json, because, _agent(by))
 
 
+def _each(ids: list[str], as_json: bool, verb: str, act) -> list:
+    """Do `act(i, id)` for each id in turn. If one is refused after others
+    succeeded, say which were done, which failed and why, which were not
+    attempted and the new revision, and exit 1: the done ones stay done."""
+    out = []
+    for i, x in enumerate(ids):
+        try:
+            out.append(act(i, x))
+        except ScrivError as e:
+            if not i:
+                raise
+            report = {"done": ids[:i], "failed": {"id": x, "reason": str(e)}, "remaining": ids[i + 1 :],
+                      "rev": review.active(_root()).rev()}
+            _emit(report, as_json, f"{verb} {i}: {', '.join(ids[:i])}. Stopped at {x}: {e}"
+                  + (f"\nNot attempted: {', '.join(report['remaining'])}" if report["remaining"] else ""))
+            raise typer.Exit(1) from None
+    return out
+
+
 def _decide(ids: list[str], all_: bool, decision: str, expect: str | None, as_json: bool,
             because: str | None = None, agent: str | None = None) -> None:
     rv = review.active(_root())
@@ -598,6 +616,8 @@ def _anchor(rv, file: str, quote: str | None, prefix: str, suffix: str, lines: s
         if text is None:
             raise ScrivError(f"{file} does not exist")
         ls = text.splitlines(keepends=True)
+        if not (a.isdigit() and (b or a).isdigit() and 1 <= int(a) <= int(b or a) <= len(ls)):
+            raise ScrivError(f"--lines takes A or A-B within 1-{len(ls)} for {file}, not {lines!r}.")
         first, last = int(a), int(b or a)
         s = sum(len(x) for x in ls[: first - 1])
         e = sum(len(x) for x in ls[:last]) - (1 if ls[last - 1].endswith("\n") else 0)
@@ -767,8 +787,8 @@ def reply(thread_id: str, body: Annotated[str, typer.Option()], by: By = None, e
 def resolve(thread_ids: list[str], by: By = None, expect: Expect = None, as_json: Json = False):
     """Mark threads resolved."""
     rv = review.active(_root())
-    done = [review.set_thread(rv, tid, "resolved", _chain(rv, expect, i), _who(rv), _agent(by))
-            for i, tid in enumerate(thread_ids)]
+    done = _each(thread_ids, as_json, "Resolved", lambda i, tid: review.set_thread(
+        rv, tid, "resolved", _chain(rv, expect, i), _who(rv), _agent(by)))
     _emit(done, as_json, "\n".join(f"{t['id']} resolved" for t in done))
 
 
@@ -806,7 +826,8 @@ def keep(draft_ids: Annotated[Optional[list[str]], typer.Argument()] = None,
         return
     if not draft_ids:
         raise ScrivError("Name the drafts to keep, or pass --all.")
-    out = [review.triage(rv, did, True, _who(rv), expect=_chain(rv, expect, i)) for i, did in enumerate(draft_ids)]
+    out = _each(draft_ids, as_json, "Kept", lambda i, did: review.triage(
+        rv, did, True, _who(rv), expect=_chain(rv, expect, i)))
     _emit(out, as_json, "\n".join(f"kept {d}" for d in draft_ids))
 
 
@@ -814,8 +835,7 @@ def keep(draft_ids: Annotated[Optional[list[str]], typer.Argument()] = None,
 def drop(draft_ids: list[str], as_json: Json = False):
     """Drop drafts."""
     rv = review.active(_root())
-    for did in draft_ids:
-        review.triage(rv, did, False, _who(rv))
+    _each(draft_ids, as_json, "Dropped", lambda i, did: review.triage(rv, did, False, _who(rv)))
     _emit(draft_ids, as_json, "\n".join(f"dropped {d}" for d in draft_ids))
 
 

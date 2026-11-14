@@ -24,6 +24,25 @@ This guide is loaded when your session starts. If scrivmark was upgraded since,
 a newer one is out, tell the human, with the update command it gives and the
 changelog link; updating is their call, and it means restarting the viewer.
 
+## What changed for agents
+
+Read this when `scrivmark doctor` says your guide was out of date, or a
+command you remember is refused. Each entry is a change that can break a habit,
+a script or a note in a project's own instructions, with what to do instead.
+Rounds already returned are never affected: their record is frozen.
+
+- **0.8.0.** A rewritten clause is now one change, not one per fragment:
+  `Wombats clearly prefer the sunniest aspect` → `Occupancy was highest on one
+  aspect and lowest on the other` used to be two changes around the surviving
+  "the". Expect fewer, longer changes in `scrivmark changes --json` for rounds
+  returned from 0.8 on; decide each as a whole, and edit the passage afterwards
+  if you want only part of it.
+- **0.7.0.** `scrivmark init` no longer commits `scrivmark.toml`; `start`
+  commits it on the round branch. Do not commit it to the author's branch
+  yourself.
+- **0.6.1.** Commands refuse when it is the other side's turn. To act for the
+  authors under the reviewer's account, `scrivmark open <round> --as "Name"`.
+
 ## The viewer
 
 If the repository has a `.claude/launch.json` entry for `scrivmark serve` and

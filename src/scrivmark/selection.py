@@ -133,7 +133,7 @@ def map_selection(src: str, text: str, before: str = "", tex: bool | dict[str, s
     sel = _norm(text)
     if len(sel) < 2:
         return None
-    hits = [m.start() for m in re.finditer(re.escape(sel), plain)]
+    hits = [m.start() for m in re.finditer(f"(?={re.escape(sel)})", plain)]  # overlapping occurrences too
     if len(hits) > 1 and before:
         ranked = sorted(hits, key=lambda i: _before_score(plain, i, before), reverse=True)
         if _before_score(plain, ranked[0], before) > _before_score(plain, ranked[1], before):

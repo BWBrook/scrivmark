@@ -144,7 +144,7 @@ async function load(force = false) {
   const keep = scrollAnchor();
   const round = r => (r && r.round ? r.round.id : null);
   const fresh = !S.st || round(S.st) !== round(st);
-  if (fresh && S.st) { saveWork(true); S.compose = {}; S.popDraft = null; S.edits = {}; touched.clear(); }
+  if (fresh && S.st) { saveWork(true); S.compose = {}; S.popDraft = null; S.edits = {}; touched.clear(); closePop(); }
   S.st = st; S.key = st.key;
   if (fresh) restoreWork();
   draw();
@@ -599,6 +599,16 @@ function composer(key, field, placeholder) {
   return ta;
 }
 
+// The revision an edit of an existing item is sent with: the page's current
+// one while the item underneath is as it was when the edit began, and
+// otherwise the one it began on, so saving over a version the writer has not
+// seen is refused as stale.
+function editing(key, start, was) {
+  const c = S.compose[key] = S.compose[key] || { ...start, was, rev: S.st.rev };
+  if (c.was === undefined || c.was === was) { c.was = was; c.rev = S.st.rev; }
+  return c;
+}
+
 function closeComposer(key) {
   delete S.compose[key]; touched.add(`compose|${key}`);
   buildMargin();
@@ -624,12 +634,12 @@ function editMessage(card, t, m, restoring = false) {
   const row = $(`.msg[data-m="${m.id}"]`, card);
   if (!row || $("textarea", row)) return;
   const key = `msg:${t.id}:${m.id}`;
-  S.compose[key] = S.compose[key] || { text: m.body };
+  const mine = editing(key, { text: m.body }, m.body);
   const ta = composer(key, "text", "Comment");
   const save = async () => {
     if (!ta.value.trim()) { notice("A comment needs some text.", 6000); return; }
     try {
-      await api("/api/message", { thread: t.id, message: m.id, body: ta.value, rev: S.st.rev });
+      await api("/api/message", { thread: t.id, message: m.id, body: ta.value, rev: mine.rev });
       delete S.compose[key]; touched.add(`compose|${key}`);
     } catch (e) { fail(e); }
   };
@@ -644,17 +654,17 @@ function editMessage(card, t, m, restoring = false) {
 
 function editDraft(card, d, restoring = false) {
   if ($("textarea", card)) return;
-  const shown = S.st.rev;
   const key = `draft:${d.id}`;
-  S.compose[key] = S.compose[key] || { text: d.body, wording: d.wording };
+  const mine = editing(key, { text: d.body, wording: d.wording }, JSON.stringify([d.body, d.wording]));
   const body = composer(key, "text", "Comment");
   const wording = d.wording !== null ? composer(key, "wording", "Wording to apply") : null;
   const keep = async () => {
-    await triage(d.id, "keep", body.value, wording ? wording.value : undefined, shown);
+    await triage(d.id, "keep", body.value, wording ? wording.value : undefined, mine.rev);
     delete S.compose[key]; touched.add(`compose|${key}`);
    
   };
-  card.append(el("div", { class: "tag" }, "Comment"), body,
+  card.append(mine.rev !== S.st.rev ? el("div", { class: "tag" }, "This draft was revised while you were editing. Cancel to see the new version.") : null,
+    el("div", { class: "tag" }, "Comment"), body,
     wording ? el("div", { class: "tag" }, "Wording to apply") : null, wording,
     el("div", { class: "acts" }, el("button", { class: "primary", onclick: keep }, "Keep"),
       el("button", { onclick: () => closeComposer(key) }, "Cancel")));
@@ -938,7 +948,7 @@ async function startEdit(block) {
     btn.disabled = true;
     btn.textContent = "Saving…";
     try {
-      await api("/api/source", { file: src.file, first: src.first, last: src.last, text: ta.value, file_rev: src.file_rev });
+      await api("/api/source", { file: src.file, first: src.first, last: src.last, text: ta.value, file_rev: src.file_rev, round: src.round });
       delete S.edits[slot];
       saveWork(true, `edit|${slot}`);
       done();

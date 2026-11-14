@@ -205,7 +205,8 @@ follows `\input` and `\include`, and takes the bibliography from
   `tikzpicture` is compiled on its own to SVG (needs `pdflatex`). Without the
   tools, those figures show as placeholders. The compile runs in a sandbox
   (built in on macOS; `bubblewrap` on Linux) that keeps it from reading your
-  own files; `scrivmark doctor` says whether one is working.
+  own files, and pictures are not compiled without one; `scrivmark doctor`
+  says whether it is working.
 - The viewer is a faithful reading of the words, not of the page: build the
   PDF as usual to check layout and page limits.
 - Citation style: pandoc's default author-date unless `csl` in
@@ -256,9 +257,11 @@ each finding, are in [`docs/audits/`](docs/audits/). In short:
 
 Developed by Barry W. Brook with AI collaborators.
 
+- **Claude (Fable 5.2, in Claude Code)** has developed and maintained it
+  since 14 November 2026 (version 0.8 on).
 - **Claude (Opus 5.5, in Claude Code)** surveyed existing tools, ran the
   design interview with Barry, wrote the design and most of the
-  implementation, and adjudicated the reviews. Claude Sonnet 5.5 subagents
+  implementation up to 0.7, and adjudicated the reviews. Claude Sonnet 5.5 subagents
   drafted some features and fixes under its direction.
 - **Codex (`gpt-6.1-sol`)** carried out the independent adversarial reviews
   of the design, the code and later fixes.

@@ -20,6 +20,15 @@ every push.
 5. `gh release create vX.Y.Z --title "scrivmark X.Y.Z" --notes-file <entry>`,
    with the entry extracted from the changelog.
 
+If the release changes anything an agent may rely on (a command, option or
+exit status, the shape of `--json` output, the record format, or what a
+command does to the text), add an entry to "What changed for agents" at the
+top of `src/scrivmark/skill/SKILL.md`, saying what to do instead. That section
+is how agents working in other projects find out: `doctor` tells them their
+guide is out of date, and they re-read it. A removed or renamed command or
+option must also refuse with a message naming its replacement, for at least
+one minor version.
+
 Minor versions add features, and patch versions fix things. Before 1.0,
 the record format may still change between minor versions; say so in the
 entry when it does.

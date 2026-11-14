@@ -89,7 +89,10 @@ def _tex_trees() -> tuple[str, ...]:
             continue
         for d in re.split(r"[:;]", got.strip().replace("!!", "")):
             if d.startswith("/") and os.path.isdir(d):
-                out.append(os.path.realpath(d))
+                real = os.path.realpath(d).rstrip("/") + "/"
+                # never a directory that holds a private area, such as "/" where TeX lives in /usr/bin
+                if not any((p + "/").startswith(real) for p in PRIVATE_MAC + PRIVATE_LINUX):
+                    out.append(real.rstrip("/"))
     return tuple(dict.fromkeys(out))
 
 
@@ -127,8 +130,8 @@ def _sandbox_works() -> bool:
 def sandbox(work: Path) -> list[str] | None:
     """The command prefix that runs a program able to read only system files,
     TeX's own trees and `work`, and to write only in `work`, with no network:
-    sandbox-exec on macOS, bubblewrap on Linux. None where neither works, and
-    then a TikZ picture can read any file its user can."""
+    sandbox-exec on macOS, bubblewrap on Linux. None where neither works;
+    pictures are then not compiled at all."""
     if not _sandbox_works():
         return None
     w = os.path.realpath(work)
@@ -148,6 +151,9 @@ def tikz(root: Path, key: str) -> tuple[Path | None, str]:
         return None, failed.read_text()
     if not shutil.which("pdflatex") or not shutil.which("pdftocairo"):
         return None, "TikZ needs pdflatex and pdftocairo on this machine"
+    if sandbox(d) is None:
+        # not remembered as a failure: it draws once a sandbox is installed
+        return None, "TikZ pictures need a sandbox to compile safely (on Linux, install bubblewrap)"
     reason = "TikZ picture did not compile here"
     for name in (f"{key}.tex", f"{key}.min.tex"):
         src = d / name
@@ -156,7 +162,7 @@ def tikz(root: Path, key: str) -> tuple[Path | None, str]:
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 shutil.copy(src, Path(tmp) / src.name)
-                subprocess.run([*(sandbox(Path(tmp)) or []), "pdflatex", "-no-shell-escape",
+                subprocess.run([*sandbox(Path(tmp)), "pdflatex", "-no-shell-escape",
                                 "-interaction=nonstopmode", "-halt-on-error", src.name],
                                capture_output=True, timeout=90, cwd=tmp, env=CONFINED)
             except subprocess.TimeoutExpired:
