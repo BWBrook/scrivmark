@@ -197,6 +197,13 @@ def doctor(as_json: Json = False):
             for tool, why in (("pdftocairo", "shows PDF figures"), ("pdflatex", "draws TikZ pictures")):
                 check(f"{tool} (optional, {why})", shutil.which(tool),
                       "" if shutil.which(tool) else "not found; those figures show as placeholders", note=True)
+            if shutil.which("pdflatex"):
+                from . import figures
+
+                boxed = figures.sandbox(root) is not None
+                check("TikZ sandbox", boxed, "" if boxed else
+                      "none working, so a TikZ picture in a manuscript you review can read any file you can; "
+                      "install bubblewrap (bwrap)", note=True)
         if any(f.endswith(".qmd") for f in ms.files):
             check(".qmd rendering", True, "rendered with pandoc in this version; Quarto code outputs are not shown yet")
     except ScrivError as e:
@@ -470,9 +477,13 @@ def status(as_json: Json = False):
              f"Changes: {c['pending']} pending, {c['accepted']} accepted, {c['rejected']} rejected, {c['superseded']} superseded\n"
              f"Comments: {t['open']} open, {t['resolved']} resolved, {t['orphaned']} orphaned\n"
              f"Drafts: {s['drafts']}\nRevision: {s['rev']}"
-             + (f"\nNot yet committed: {', '.join(s['uncommitted'])} (`scrivmark return` commits the round)"
+             + (f"\nNot yet committed: {', '.join(s['uncommitted'])} (`scrivmark {_commits(r['status'])}` commits the round)"
                 if s["uncommitted"] else ""))
     _emit(s, as_json, human)
+
+
+def _commits(status: str) -> str:
+    return {"open": "return", "returned": "respond` or `scrivmark close", "responded": "return` or `scrivmark close"}.get(status, "close")
 
 
 @app.command("rounds")

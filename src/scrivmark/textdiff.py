@@ -107,15 +107,17 @@ def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment, tex: bool = F
     ops = _slide(sm.get_opcodes(), ot, nt)
     groups: list[list[tuple]] = []
     cur: list[tuple] = []
+    weight = 0
     for idx, op in enumerate(ops):
-        tag, i1, i2, _, _ = op
+        tag, i1, i2, j1, j2 = op
         if tag != "equal":
             cur.append(op)
-        elif cur and idx < len(ops) - 1 and all(t.kind == "space" for t in ot[i1:i2]):
+            weight += max(_words(ot[i1:i2]), _words(nt[j1:j2]))
+        elif cur and idx < len(ops) - 1 and _joins(ot[i1:i2], weight, ops[idx + 1], ot, nt):
             cur.append(op)
         elif cur:
             groups.append(cur)
-            cur = []
+            cur, weight = [], 0
     if cur:
         groups.append(cur)
     units = []
@@ -135,6 +137,28 @@ def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment, tex: bool = F
         if old[o0:o1].strip() or new[n0:n1].strip():
             units.append(Unit("text", (o0, o1), (n0, n1), old[o0:o1], new[n0:n1]))
     return units
+
+
+def _words(ts: list[Token]) -> int:
+    return sum(t.kind not in ("space", "punct") for t in ts)
+
+
+def _joins(kept: list[Token], before: int, nxt: tuple, ot: list[Token], nt: list[Token]) -> bool:
+    """Whether the unchanged stretch `kept` between two edits belongs to one
+    rewrite: it is only whitespace, or it is a few words inside one clause
+    (commas allowed, other punctuation not), fewer than the edits on both
+    sides of it. "Wombats clearly prefer the
+    sunniest aspect" rewritten around a surviving "the" is one change to
+    decide, not two whose halves make no sense apart."""
+    if all(t.kind == "space" for t in kept):
+        return True
+    n = _words(kept)
+    if n > 3 or any(t.kind == "space" and "\n\n" in t.text for t in kept):
+        return False
+    if any(t.kind == "punct" and t.text != "," for t in kept):
+        return False
+    after = max(_words(ot[nxt[1] : nxt[2]]), _words(nt[nxt[3] : nxt[4]]))
+    return n < min(before, after)
 
 
 def _similar(a: str, b: str) -> bool:

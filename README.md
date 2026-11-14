@@ -1,7 +1,8 @@
 # scrivmark
 
-> **Status:** beta (version 0.6), developed in the open and used on real
-> manuscripts. Try the tutorial first, and please report rough edges.
+> **Status:** beta, developed in the open and used on real manuscripts. Try
+> the tutorial first, and please report rough edges. [CHANGELOG.md](CHANGELOG.md)
+> says what each release changed.
 
 **Track changes and comments for manuscripts written in Markdown, Quarto or
 LaTeX, without Word.**
@@ -202,7 +203,9 @@ follows `\input` and `\include`, and takes the bibliography from
   own labels.
 - PDF figures are shown as PNGs (needs `pdftocairo`, from Poppler) and each
   `tikzpicture` is compiled on its own to SVG (needs `pdflatex`). Without the
-  tools, those figures show as placeholders.
+  tools, those figures show as placeholders. The compile runs in a sandbox
+  (built in on macOS; `bubblewrap` on Linux) that keeps it from reading your
+  own files; `scrivmark doctor` says whether one is working.
 - The viewer is a faithful reading of the words, not of the page: build the
   PDF as usual to check layout and page limits.
 - Citation style: pandoc's default author-date unless `csl` in

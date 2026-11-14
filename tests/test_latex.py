@@ -229,16 +229,22 @@ def test_labels_verbatim_and_aligned_equations(tmp_path):
 
 def test_figure_lookup_stays_inside_the_repository(texrepo):
     rounds.start(texrepo)
-    (texrepo / "leak.png").symlink_to("/etc/hostname")
+    outside = texrepo.parent / "outside.png"
+    outside.write_bytes(b"OUTSIDE-THE-REPOSITORY")
+    (texrepo / "leak.png").symlink_to(outside)
     viewer = Viewer(texrepo)
     c = TestClient(build_app(viewer), base_url="http://127.0.0.1")
     c.cookies.set(viewer.cookie, viewer.token)
     r = c.get("/png/leak.png")
-    assert open("/etc/hostname", "rb").read() not in r.content
+    assert outside.read_bytes() not in r.content
 
 
 @pytest.mark.skipif(not (shutil.which("pdflatex") and shutil.which("pdftocairo")), reason="needs pdflatex and pdftocairo")
 def test_tikz_cannot_read_files_and_tolerates_comments(texrepo, tmp_path):
+    from scrivmark import figures
+
+    if figures.sandbox(tmp_path) is None:
+        pytest.skip("no working sandbox-exec or bwrap here, so TikZ reads are not confined")
     secret = tmp_path / "secret.tex"
     secret.write_text("TOPSECRET")
     rounds.start(texrepo)

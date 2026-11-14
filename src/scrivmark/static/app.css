@@ -68,6 +68,11 @@ button.primary { background: var(--accent); color: var(--paper); border-color: v
   border-bottom: 1px solid var(--rule);
 }
 .bar-left, .bar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bar-left { flex: 0 1 auto; }
+.bar-right { flex: 1 1 auto; justify-content: flex-end; }
+#bar button, #bar .badge, .brand { flex: none; white-space: nowrap; }
+#counts { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) { .brand { display: none; } #bar { padding: 6px 8px; gap: 6px; } }
 .brand { font-weight: 650; letter-spacing: .01em; }
 .badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--rule); }
 .badge.reviewer { background: var(--ins-bg); color: var(--ins); }
@@ -199,7 +204,7 @@ mark.scrv-hl.active { background: var(--hl-active); }
 .editor .acts { display: flex; gap: 6px; justify-content: flex-end; margin: 4px 0 10px; }
 .editor .hint { font: 12px system-ui, sans-serif; color: var(--muted); }
 
-dialog { border: none; border-radius: 12px; box-shadow: var(--shadow); background: var(--card); color: var(--ink); max-width: 520px; }
+dialog { border: none; border-radius: 12px; box-shadow: var(--shadow); background: var(--card); color: var(--ink); max-width: 520px; max-height: calc(100vh - 32px); overflow-y: auto; }
 dialog li { margin: 6px 0; }
 kbd { border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; font-size: 12px; }
 .scrv-error { white-space: pre-wrap; color: var(--del); }

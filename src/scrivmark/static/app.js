@@ -957,7 +957,12 @@ function queue() {
   const changes = st.mode === "author" || st.mode === "signoff"
     ? $$("[data-c][tabindex]", doc)
     : $$(".scrv-del, .scrv-ins, .scrv-old, .scrv-ins-block", doc);
-  const inText = [...new Set([...marks, ...changes])]
+  // a replacement is drawn as a deleted and an inserted span: one stop, at the first
+  const seen = new Set();
+  const paired = x => x.classList.contains("scrv-ins") && x.previousSibling
+    && x.previousSibling.nodeType === 1 && x.previousSibling.classList.contains("scrv-del");
+  const once = changes.filter(x => x.dataset.c ? !seen.has(x.dataset.c) && seen.add(x.dataset.c) : !paired(x));
+  const inText = [...new Set([...marks, ...once])]
     .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
   return [...outside, ...inText];
 }

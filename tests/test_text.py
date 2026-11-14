@@ -72,3 +72,17 @@ def test_projection_follows_a_rewritten_passage_but_not_a_deleted_one():
     gone = old.replace(" It proves that wombats prefer sunny burrows.", "")
     p = old.index(" It proves")
     assert Projection(old, gone).around(s, e) == (p, p)
+
+
+def test_a_rewrite_around_a_few_surviving_words_is_one_change():
+    old = "Wombats clearly prefer the sunniest aspect, which shows that thermal\nbenefits drive the choice.\n"
+    new = "Occupancy was highest on one aspect and lowest on the other, so these data do not show that thermal\nbenefits drive the choice.\n"
+    assert [(u.old_text, u.new_text) for u in diff_units(old, new)] == [
+        ("Wombats clearly prefer the sunniest aspect, which shows",
+         "Occupancy was highest on one aspect and lowest on the other, so these data do not show")]
+    # separate small corrections stay separate, as do edits either side of a bracket or a full stop
+    apart = diff_units("The data was clear and the model was good.\n", "The data were clear and the model is good.\n")
+    assert [(u.old_text, u.new_text) for u in apart] == [("was", "were"), ("was", "is")]
+    clause = diff_units("Occupancy was high (0.80) in the north-west burrows.\n",
+                        "Occupancy was highest (0.80; 95% CI 0.6-0.9) in north-western burrows.\n")
+    assert len(clause) == 3

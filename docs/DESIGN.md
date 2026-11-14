@@ -1,6 +1,6 @@
 # scrivmark design
 
-Status: design locked 3 November 2026; this document tracks what is built (6 November 2026, version 0.4).
+Status: design locked 3 November 2026; this document tracks what is built (14 November 2026, version 0.8).
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
 cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
@@ -9,7 +9,7 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
-## Implementation status (6 November 2026, version 0.4)
+## Implementation status (14 November 2026, version 0.8)
 
 Built: the round lifecycle over plain git, with pull requests through `gh`;
 the frozen change catalogue, decisions and undo; anchoring, with orphaned
@@ -113,7 +113,10 @@ and `R` into a list of **change units** in the record, each with a stable id
 (`c1`, `c2`, …), its type, its base and reviewer text, and its exact range in
 `R`. Decisions are keyed by id, never by recomputed content. Unit types:
 
-- `text`: a run of word-level changes inside one aligned prose block;
+- `text`: a run of word-level changes inside one aligned prose block. Edits
+  separated only by a few unchanged words inside one clause, fewer than the
+  edits on both sides, are one unit, so a rewritten sentence is one decision
+  (`textdiff._joins`);
 - `block`: a whole block inserted, deleted or restructured (lists, tables, YAML
   front matter, fenced divs, code chunks);
 - `file`: a file added, deleted, renamed or binary-replaced (figures, the
@@ -458,7 +461,13 @@ blocks that carry LaTeX through the Markdown pipeline carry the render nonce,
 and the filter ignores any without it, so a Markdown manuscript cannot reach
 the LaTeX reader on any version (external audit, 5 November 2026, F04).
 Every pandoc run has a 120-second timeout. TikZ pictures compile in a
-temporary directory with `openin_any=p`.
+temporary directory, without shell escape, inside an operating-system sandbox
+(`sandbox-exec` on macOS, `bubblewrap` on Linux) that has no network, can
+write only there, and cannot read home directories, other volumes or
+temporary directories, apart from TeX's own trees (`figures.sandbox`). TeX's
+own `openin_any` is not relied on: TeX Live 2026 made it a no-op. Where no
+sandbox works, pictures still compile and `doctor` says reads are not
+confined.
 
 ## Agent interface
 
@@ -495,14 +504,14 @@ file-level changes in the catalogue.
 
 Local state (drafts, selection, asks, intents) lives in
 `.scrivmark/<round id>/`, git-ignored. The server enforces draft visibility,
-not just the page. The repo ships an agent guide, `skills/scrivmark/SKILL.md`,
-for both Claude and Codex.
+not just the page. The repo ships an agent guide, `src/scrivmark/skill/SKILL.md`
+(installed with `scrivmark skill --install`), for both Claude and Codex.
 
 ## Packaging and stack
 
 - Python ≥ 3.12 with `uv`; installed by both sides with
   `uv tool install git+https://github.com/BWBrook/scrivmark`.
-- Starlette and uvicorn; `watchfiles`; `nh3`; `jsonschema`.
+- Starlette and uvicorn; `watchfiles`; `jsonschema`; Typer for the CLI.
 - Front end: plain HTML, CSS and JavaScript in the package, with no Node build
   step and no CDN at run time. MathML for equations.
 - Host tools: `git` and `pandoc` ≥ 3.1 required; Quarto for `.qmd`
