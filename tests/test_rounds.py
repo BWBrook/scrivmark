@@ -395,3 +395,33 @@ def test_return_can_restate_how_the_review_was_done(repo):
     assert review.active(repo).rec["round"]["statement"] == "Reviewed with Claude and Codex."
     with pytest.raises(ScrivError, match="already returned"):
         rounds.return_round(repo, push=False, statement="Changed my mind.")
+
+
+def test_your_own_comment_can_be_deleted_until_the_other_side_has_seen_it(repo, monkeypatch):
+    """Barry Brook, 16 November 2026: a kept comment could be resolved but
+    never taken back."""
+    from typer.testing import CliRunner
+    from scrivmark.cli import app
+    rv = rounds.start(repo)
+    mine = review.comment(rv, review.anchor_quote(rv, "paper.md", "thermal benefits"), "A caveat.", "BWB")
+    other = review.comment(review.active(repo), review.anchor_quote(rv, "paper.md", "should should"), "Doubled.", "BWB")
+    review.add_draft(review.active(repo), review.anchor_quote(rv, "paper.md", "thermal benefits"), "From a draft.", None, by="Terra")
+    review.keep_all(review.active(repo), "BWB")
+    kept = next(t for t in review.active(repo).rec["threads"] if t["messages"][0].get("drafted_by"))
+    with pytest.raises(ScrivError):
+        review.delete_message(review.active(repo), mine["id"], mine["messages"][0]["id"], "SS")
+    r = CliRunner().invoke(app, ["delete", mine["id"], kept["messages"][0]["id"], "--json"])
+    assert r.exit_code == 0, r.output
+    assert [t["id"] for t in review.active(repo).rec["threads"]] == [other["id"]]
+
+    info = rounds.return_round(repo, push=False)
+    with pytest.raises(ScrivError):
+        review.delete_message(review.active(repo), other["id"], other["messages"][0]["id"], "BWB")
+    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
+    rounds.open_round(repo, info["round"])
+    t = review.reply(review.active(repo), other["id"], "Agreed.", "SS")
+    with pytest.raises(ScrivError, match="Resolve the thread instead"):
+        review.delete_message(review.active(repo), other["id"], other["messages"][0]["id"], "SS")
+    out = review.delete_message(review.active(repo), other["id"], t["messages"][-1]["id"], "SS")
+    assert out["thread_deleted"] is False
+    assert [m["body"] for m in review._thread(review.active(repo), other["id"])["messages"]] == ["Doubled."]

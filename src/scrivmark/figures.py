@@ -50,15 +50,19 @@ def resolve(root: Path, rel: str) -> Path | None:
 
 
 def locate(root: Path, rel: str, paths: list[tuple[str, str]]) -> str:
-    """`rel` as it stands if it names a graphic, else under the first
+    """`rel` as it stands if it names a graphic, else under the one
     \\graphicspath directory (latex.graphics_paths) that holds it."""
     if resolve(root, rel):
         return rel
+    found = set()
     for doc, d in paths:
         rest = rel if doc == "." else rel[len(doc) + 1 :] if rel.startswith(doc + "/") else None
         if rest is not None and resolve(root, f"{d}/{rest}"):
-            return f"{d}/{rest}"
-    return rel
+            found.add(f"{d}/{rest}")
+    # Two documents in one directory, each with its own graphics path holding
+    # a graphic of this name: which is meant cannot be told, and a placeholder
+    # is better than the other document's figure.
+    return found.pop() if len(found) == 1 else rel
 
 
 def png(root: Path, rel: str) -> Path | None:

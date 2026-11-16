@@ -28,7 +28,7 @@ repository.
   change shows as a tracked change straight away.
 - **Comment on a selection.** Select some text and press **Comment**. Comments
   sit in the margin, anchored to their passage, and follow it as the text is
-  edited. You can edit your own comments until you hand the review back.
+  edited. You can edit or delete your own comments until you hand the review back.
 - **Ask your AI collaborator.** Select text and press **Ask agent**, or tell
   Claude or Codex "look at my selection". Answers appear on a card in the
   margin, and an answer can become a comment, or its proposed wording a

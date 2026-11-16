@@ -82,3 +82,24 @@ round use sentences written for them.
   for from that file's directory, where LaTeX looks from the root document's.
 - Not tested: a round on WSL, `beamer` or `memoir` classes, a document split
   over `\include` chapters, and bibliographies in `biblatex`.
+
+## Independent review of 0.11.0
+
+A read-only review by Codex (`gpt-6.1-sol`, high effort, via
+`codex-delegate`) the same evening, asked for defects in text restoration,
+the heading change, floats as text, and the figure routes. It reported three,
+each reproduced and fixed in 0.12.0 with a test:
+
+- R1: `\begin{figure*}` changed to `\begin{figure}`, with its `\end`, was
+  two changes, and rejecting one alone left mismatched LaTeX. Lists had the
+  same fault before 0.11. A unit that opens or closes an environment without
+  its partner now makes the whole block one change.
+- R2: a line deleted from a YAML header stayed in the reviewer's view of an
+  open round, because the header was rendered with the old lines put back.
+- R3: two root documents in one directory, each with a `\graphicspath`
+  holding a graphic of the same name: the second showed the first one's
+  figure. The viewer cannot tell which document asked, so it now shows the
+  placeholder.
+
+It found no way to read files outside the repository through
+`\graphicspath`, and no defect in the heading change.

@@ -749,6 +749,26 @@ def revise(item_id: Annotated[str, typer.Argument(help="A draft id (d-…), or a
     _emit(d, as_json, f"Revised {d['id']} (version {len(d['history']) + 1}).")
 
 
+@app.command()
+def delete(item_ids: Annotated[list[str], typer.Argument(help="Thread ids (t-…) or message ids (m-…).")],
+           expect: Expect = None, as_json: Json = False):
+    """Delete your own comments or replies before the other side has seen them
+    (until the round next changes hands). A thread id, or the id of the
+    comment that opens a thread, deletes the thread. After that, resolve
+    instead. An edit applied with a kept draft stays in the text."""
+    def one(i: int, item: str) -> dict:
+        rv = review.active(_root())
+        t = next((t for t in rv.rec["threads"] if t["id"] == item or any(m["id"] == item for m in t["messages"])), None)
+        if t is None:
+            raise ScrivError(f"No thread or message {item} in this round.")
+        mid = t["messages"][0]["id"] if t["id"] == item else item
+        return review.delete_message(rv, t["id"], mid, _who(rv), _chain(rv, expect, i))
+
+    done = _each(item_ids, as_json, "Deleted", one)
+    _emit(done, as_json, "\n".join(f"Deleted thread {d['thread']}" if d["thread_deleted"]
+                                   else f"Deleted {d['message']} from thread {d['thread']}" for d in done))
+
+
 @app.command("import-comments")
 def import_comments(dry_run: Annotated[bool, typer.Option("--dry-run", help="List what would be imported.")] = False,
                     expect: Expect = None, as_json: Json = False):

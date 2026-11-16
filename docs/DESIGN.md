@@ -1,6 +1,6 @@
 # scrivmark design
 
-Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.11).
+Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.12).
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
 cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
@@ -9,7 +9,7 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
-## Implementation status (16 November 2026, version 0.11)
+## Implementation status (16 November 2026, version 0.12)
 
 Built: the round lifecycle over plain git, with pull requests through `gh`;
 the frozen change catalogue, decisions and undo; anchoring, with orphaned

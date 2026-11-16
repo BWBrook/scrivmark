@@ -10,6 +10,29 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.12.0 (16 November 2026)
+
+- **You can delete your own comment.** A comment could be edited until the
+  other side had seen it, but only resolved, never taken back; that included
+  a comment kept from an agent's draft. Now `scrivmark delete t-…` deletes a
+  thread you opened, and `scrivmark delete m-…` one reply, under the same
+  rule as editing: your side's own, until the round next changes hands. In
+  the viewer, Delete is in the comment's Edit box. Once the other side has
+  seen a comment it stays in the record; resolve it. An edit that a kept
+  draft applied to the text is a tracked change of its own and stays.
+
+- Three defects in 0.11.0, found by an independent review (Codex) and fixed:
+  - Changing a float's environment (`figure*` to `figure`) was two changes,
+    one for `\begin` and one for `\end`, and rejecting one alone left
+    LaTeX that does not compile. A change that opens or closes an
+    environment without its partner is now one change for the whole block;
+    this holds for lists and other environments too.
+  - While a round was open, a title or other line the reviewer deleted from
+    a YAML header was still shown in the reviewer's view.
+  - Where two documents in one directory each named a `\graphicspath`
+    holding a graphic of the same name, the second document showed the
+    first one's figure. It now shows a placeholder.
+
 ## 0.11.0 (16 November 2026)
 
 LaTeX, after a practice round on a public 10,700-word paper

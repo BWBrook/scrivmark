@@ -420,6 +420,8 @@ def build_app(viewer: Viewer) -> Starlette:
 
     def message(request: Request, b: dict):
         rv = viewer.need()
+        if b.get("delete"):
+            return JSONResponse(review.delete_message(rv, b["thread"], b["message"], review.who(rv), b.get("rev")))
         return JSONResponse(review.edit_message(rv, b["thread"], b["message"], b["body"], review.who(rv), b.get("rev")))
 
     def thread_status(request: Request, b: dict):

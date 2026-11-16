@@ -875,6 +875,29 @@ def edit_message(rv: Review, tid: str, mid: str, body: str, who: str, expect: st
     return t
 
 
+def delete_message(rv: Review, tid: str, mid: str, who: str, expect: str | None = None) -> dict:
+    """Take back one of your own messages before the other side has seen it.
+    Deleting the comment that opens a thread deletes the thread, which needs
+    every message in it to be yours and unseen. An edit applied with a kept
+    draft stays in the text: it is a change of its own."""
+    late = ("Only your own messages can be deleted, and only until the other side has seen them "
+            "(until the round next changes hands). Resolve the thread instead.")
+    with _locked(rv, expect, LIVE) as writes:
+        t = _thread(rv, tid)
+        m = next((x for x in t["messages"] if x["id"] == mid), None)
+        if m is None:
+            raise ScrivError(f"No message {mid} in thread {tid}")
+        whole = m is t["messages"][0]
+        if not all(can_edit(rv, x, who) for x in (t["messages"] if whole else [m])):
+            raise ScrivError(late)
+        if whole:
+            rv.rec["threads"].remove(t)
+        else:
+            t["messages"].remove(m)
+        writes[rv.record_rel] = record.dumps(rv.rec)
+    return {"thread": tid, "message": mid, "thread_deleted": whole}
+
+
 def set_thread(rv: Review, tid: str, status: str, expect: str | None = None, who: str | None = None,
                agent: str | None = None) -> dict:
     with _locked(rv, expect, LIVE) as writes:

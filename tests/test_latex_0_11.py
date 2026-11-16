@@ -75,3 +75,41 @@ def test_figures_are_found_under_graphicspath(texrepo):  # noqa: F811
     r = c.get("/files/tex/burrow.png")
     assert r.status_code == 200 and r.content == PNG
     assert c.get("/files/tex/absent.png").status_code == 404
+
+
+def test_a_float_whose_environment_changed_is_one_change():
+    """Codex review of 0.11.0, R1: \\begin{figure*} -> \\begin{figure} and its
+    \\end were two changes, and rejecting one alone left mismatched LaTeX."""
+    new = DOC.replace("\\begin{figure}", "\\begin{figure*}").replace("\\end{figure}", "\\end{figure*}")
+    (u,) = diff_units(DOC, new, True)
+    assert u.type == "block" and u.old_text.startswith("\\begin{figure}") and u.new_text.rstrip().endswith("\\end{figure*}")
+    lists = "\\begin{document}\n\\begin{itemize}\n\\item Cameras at each burrow.\n\\item Occupancy models.\n\\end{itemize}\n\\end{document}\n"
+    (u,) = diff_units(lists, lists.replace("itemize", "enumerate"), True)
+    assert u.type == "block"
+
+
+def test_a_deleted_yaml_title_is_not_shown_to_the_reviewer(repo):
+    """Codex review of 0.11.0, R2."""
+    from scrivmark import rounds
+    p = repo / "paper.md"
+    text = p.read_text()
+    if not text.startswith("---\n"):
+        text = "---\ntitle: Old title\nauthor: Sam\n---\n\n" + text
+        p.write_text(text)
+        from conftest import git
+        git(repo, "commit", "-qam", "yaml")
+    line = next(x for x in text.splitlines() if x.startswith("title:"))
+    rounds.start(repo)
+    p.write_text(text.replace(line + "\n", "", 1))
+    html = Viewer(repo).state()["html"]
+    assert line.split(":", 1)[1].strip().strip('"') not in html
+
+
+def test_a_graphic_two_documents_could_mean_is_not_guessed(tmp_path):
+    """Codex review of 0.11.0, R3."""
+    from scrivmark import figures
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "result.png").write_bytes(PNG)
+    assert figures.locate(tmp_path, "result.png", [(".", "a"), (".", "b")]) == "result.png"
+    assert figures.locate(tmp_path, "result.png", [(".", "a")]) == "a/result.png"

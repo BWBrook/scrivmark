@@ -31,6 +31,10 @@ command you remember is refused. Each entry is a change that can break a habit,
 a script or a note in a project's own instructions, with what to do instead.
 Rounds already returned are never affected: their record is frozen.
 
+- **0.12.0.** New command, nothing removed: `scrivmark delete <t-… | m-…>`
+  deletes your side's own comment or reply until the other side has seen it.
+  If your notes say a kept comment can only be resolved, that is now true only
+  after the round has changed hands.
 - **0.11.0.** For rounds returned from 0.11 on, some changes are cut finer.
   Nothing in the record format or `--json` shapes changed, and earlier
   versions read these records.
@@ -201,6 +205,14 @@ the side's initials, so the record says which agent did what.
   messages until the round is returned, the author's until it is closed. Edit
   the human's own comments only when they ask you to. In the viewer, the same
   edit is the Edit button on the message.
+- **Deleting a comment.** `scrivmark delete t-…` (or the `m-` id of one
+  reply) takes back a comment under the same rule as editing: your side's own,
+  and only until the other side has seen it. Deleting the comment that opens
+  a thread deletes the thread. After the hand-over, resolve instead. If the
+  comment came from a kept draft that also applied an edit, the edit stays in
+  the text as a tracked change; undo that in the text if it is unwanted too.
+  Delete the human's own comments only when they ask you to. In the viewer,
+  Delete is in the message's Edit box.
 - **Line edits.** Propose line edits as drafts with `wording` and an empty
   `body`, not as edits to the files, whether you are the only agent or
   another has already edited the files in this round: each shows as "Line edit, no

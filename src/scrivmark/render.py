@@ -228,7 +228,7 @@ def _reviewer_view(b: _Builder, old: str | None, first: bool) -> None:
     cur = b.cur
     ops = align(old, cur, b.tex) if old is not None and old != cur else [Op("equal", [], guarded_segments(cur, b.tex), [])]
     for op in ops:
-        if op.tag == "equal" or (op.tag == "pair" and not op.units):
+        if op.tag == "equal" or (op.tag == "pair" and (not op.units or op.new[0].kind in HIDDEN)):
             for seg in op.new:
                 b.yaml(seg, first) if seg.kind in HIDDEN else b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
         elif op.tag == "pair":

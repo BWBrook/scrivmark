@@ -645,9 +645,20 @@ function editMessage(card, t, m, restoring = false) {
   };
   ta.addEventListener("click", e => e.stopPropagation());
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save(); if (e.key === "Escape") closeComposer(key); });
+  const whole = t.messages[0].id === m.id;
+  const removable = !whole || t.messages.every(x => (t.editable || []).includes(x.id));
+  const remove = async () => {
+    if (!confirm(whole ? "Delete this comment? The other side has not seen it." : "Delete this reply? The other side has not seen it.")) return;
+    try {
+      await api("/api/message", { thread: t.id, message: m.id, delete: true, rev: mine.rev });
+      delete S.compose[key]; touched.add(`compose|${key}`);
+    } catch (e) { fail(e); }
+  };
   row.replaceChildren(el("span", { class: "by" }, byline(m.by, m.agent)), ta, el("div", { class: "acts" },
     el("button", { class: "primary", onclick: e => { e.stopPropagation(); save(); } }, "Save"),
-    el("button", { onclick: e => { e.stopPropagation(); closeComposer(key); } }, "Cancel")));
+    el("button", { onclick: e => { e.stopPropagation(); closeComposer(key); } }, "Cancel"),
+    removable ? el("button", { title: "Delete it (until the other side has seen it)",
+      onclick: e => { e.stopPropagation(); remove(); } }, "Delete") : null));
   if (!restoring) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   layoutMargin();
 }

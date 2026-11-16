@@ -95,6 +95,19 @@ def test_a_comment_is_made_from_a_selection(repo, view):
     assert thread["anchor"]["exact"] == "imperfect detection"
 
 
+def test_a_comment_is_deleted_from_its_edit_box(repo, view):
+    rv = rounds.start(repo)
+    review.comment(rv, review.anchor_quote(rv, "paper.md", "imperfect detection"), "Wrong passage.", "BWB")
+    page = view()
+    card = page.locator("#margin .card.open")
+    card.hover()
+    card.get_by_role("button", name="Edit").click()
+    page.once("dialog", lambda d: d.accept())
+    card.get_by_role("button", name="Delete").click()
+    expect(page.locator("#margin .card.open")).to_have_count(0)
+    assert review.active(repo).rec["threads"] == []
+
+
 def test_a_passage_is_edited_in_place_and_shows_as_a_tracked_change(repo, view):
     rounds.start(repo)
     page = view()

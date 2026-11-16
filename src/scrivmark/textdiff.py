@@ -415,7 +415,8 @@ def _align(old: str, new: str, os_: list[Segment], ns: list[Segment], tex: bool,
                 elif kind == "pair":
                     oseg, nseg = os_[oi], ns[nj]
                     units = _token_hunks(old, new, oseg, nseg, tex)
-                    if _structure_differs(okeys[oi], _undo(new, nseg, units), tex):
+                    if any(_opens(u.old_text) or _opens(u.new_text) for u in units) or \
+                            _structure_differs(okeys[oi], _undo(new, nseg, units), tex):
                         block(oi, oi + 1, nj, nj + 1)
                     else:
                         ops.append(Op("pair", [oseg], [nseg], units))
@@ -428,6 +429,19 @@ def _align(old: str, new: str, os_: list[Segment], ns: list[Segment], tex: bool,
         else:
             blocks(i1, i2, j1, j2)
     return ops
+
+
+ENV = re.compile(r"\\(begin|end)\s*\{([^{}]*)\}")
+
+
+def _opens(text: str) -> bool:
+    """Whether a piece of LaTeX opens an environment it does not close, or
+    closes one it did not open. Such a piece cannot be a change of its own:
+    rejecting it alone would leave \\begin{figure*} ... \\end{figure}."""
+    depth: dict[str, int] = {}
+    for m in ENV.finditer(text):
+        depth[m.group(2)] = depth.get(m.group(2), 0) + (1 if m.group(1) == "begin" else -1)
+    return any(depth.values())
 
 
 def _line_hunks(old: str, new: str, oseg: Segment, nseg: Segment) -> list[Unit]:
