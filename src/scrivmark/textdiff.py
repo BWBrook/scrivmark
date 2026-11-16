@@ -8,7 +8,7 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 
 from . import latex
-from .blocks import Segment, guarded_segments, pandoc_blocks
+from .blocks import HIDDEN, Segment, guarded_segments, pandoc_blocks
 
 TOKEN = re.compile(
     r"""
@@ -27,7 +27,7 @@ TOKEN = re.compile(
 )
 WORDS = re.compile(r"\s+|\w+|[^\w\s]")
 ATOMIC = {"fnref", "cite", "link", "math", "code", "attr", "ref"}
-TEXT_KINDS = {"para", "heading", "list", "footnote", "table", "div", "merged"}
+TEXT_KINDS = {"para", "heading", "list", "footnote", "table", "div", "float", "merged"}
 
 
 @dataclass
@@ -421,11 +421,27 @@ def _align(old: str, new: str, os_: list[Segment], ns: list[Segment], tex: bool,
                         ops.append(Op("pair", [oseg], [nseg], units))
                 elif kind == "reflow":
                     block(oi, i1 + a2, nj, j1 + b2, reflow=True)
+                elif a2 - a1 == b2 - b1 == 1 and os_[oi].kind == ns[nj].kind and os_[oi].kind in HIDDEN:
+                    ops.append(Op("pair", [os_[oi]], [ns[nj]], _line_hunks(old, new, os_[oi], ns[nj])))
                 else:
                     blocks(oi, i1 + a2, nj, j1 + b2)
         else:
             blocks(i1, i2, j1, j2)
     return ops
+
+
+def _line_hunks(old: str, new: str, oseg: Segment, nseg: Segment) -> list[Unit]:
+    """The changed lines of a block that is never shown as running text (a
+    LaTeX preamble, a YAML header): each run of them is one change, where the
+    whole block as one change would hide a one-line edit in fifty lines."""
+    ol, nl = old[oseg.b0 : oseg.b1].splitlines(keepends=True), new[nseg.b0 : nseg.b1].splitlines(keepends=True)
+    oat, nat = [oseg.b0 + x for x in _offsets(ol)], [nseg.b0 + x for x in _offsets(nl)]
+    units = []
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, ol, nl, autojunk=False).get_opcodes():
+        if tag != "equal":
+            o, n = (oat[i1], oat[i2]), (nat[j1], nat[j2])
+            units.append(Unit("text", o, n, old[o[0] : o[1]], new[n[0] : n[1]]))
+    return units
 
 
 def _undo(new: str, seg: Segment, units: list[Unit]) -> str:

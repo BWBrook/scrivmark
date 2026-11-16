@@ -80,6 +80,12 @@ class Viewer:
         except ScrivError:
             return None
 
+    def graphics_paths(self) -> list[tuple[str, str]]:
+        try:
+            return latex.graphics_paths(self.root, config.load(self.root).files)
+        except ScrivError:
+            return []
+
     def mode(self, rv: review.Review | None) -> str:
         if rv is None:
             return "read"
@@ -332,7 +338,7 @@ def build_app(viewer: Viewer) -> Starlette:
     async def repo_file(request: Request):
         if not authorised(request):
             return Response(status_code=403)
-        rel = request.path_params["path"]
+        rel = figures.locate(viewer.root, request.path_params["path"], viewer.graphics_paths())
         p = (viewer.root / rel).resolve()
         if viewer.root.resolve() not in p.parents or ".git" in p.parts or ".scrivmark" in p.parts or not p.is_file():
             return Response(status_code=404)
@@ -344,7 +350,7 @@ def build_app(viewer: Viewer) -> Starlette:
         rel = request.path_params["path"]
         if not rel.endswith(".png"):
             return Response(status_code=404)
-        out = await asyncio.to_thread(figures.png, viewer.root, rel[:-4])
+        out = await asyncio.to_thread(figures.png, viewer.root, figures.locate(viewer.root, rel[:-4], viewer.graphics_paths()))
         if out is None:
             return Response(figures.placeholder("Figure could not be shown"), media_type="image/svg+xml",
                             headers={"Content-Security-Policy": "sandbox; script-src 'none'"})

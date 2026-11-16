@@ -1,6 +1,6 @@
 # scrivmark design
 
-Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.10).
+Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.11).
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
 cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
@@ -9,7 +9,7 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
-## Implementation status (16 November 2026, version 0.10)
+## Implementation status (16 November 2026, version 0.11)
 
 Built: the round lifecycle over plain git, with pull requests through `gh`;
 the frozen change catalogue, decisions and undo; anchoring, with orphaned
@@ -414,8 +414,10 @@ desktop app's browser pane.
   `\textcolor{scrvdel-<nonce>-<change>}{...}`, which the reader keeps as a
   styled span and the filter turns into the same `scrv-del`/`scrv-ins` spans,
   so the guard, sanitising and numbering are shared. The splitter
-  (`latex.scan`) cuts at blank lines, headings and block environments; the
-  preamble and everything from `\end{document}` are hidden blocks; comment
+  (`latex.scan`) cuts at blank lines, headings and block environments; a
+  heading takes the `\label` lines after it; the
+  preamble and everything from `\end{document}` are hidden blocks, diffed by
+  line; `figure` and `table` floats are diffed by word like prose; comment
   lines and display maths stay with their paragraph, as in TeX. Labels become
   `fig-`/`tbl-`/`eq-`/`sec-` identifiers and `\ref`-family links become
   cross-reference citations. TikZ pictures are written to `.scrivmark/cache`

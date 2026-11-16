@@ -198,10 +198,13 @@ follows `\input` and `\include`, and takes the bibliography from
 
 - The preamble is not shown, but its `\newcommand` definitions are expanded,
   and selections across simple macros map back to the source.
+  A change to the preamble is listed above the text, the changed lines only.
+- A heading and the `\label` on the lines after it are one block.
 - `%` comments show as grey "comment in the source" notes.
 - `\ref`, `\eqref`, `\cref` and `\autoref` are numbered from the document's
   own labels.
-- PDF figures are shown as PNGs (needs `pdftocairo`, from Poppler) and each
+- Figures are looked for beside the document and under its `\graphicspath`.
+  PDF figures are shown as PNGs (needs `pdftocairo`, from Poppler) and each
   `tikzpicture` is compiled on its own to SVG (needs `pdflatex`). Without the
   tools, those figures show as placeholders. The compile runs in a sandbox
   (built in on macOS; `bubblewrap` on Linux) that keeps it from reading your

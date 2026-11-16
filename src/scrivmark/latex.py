@@ -9,6 +9,7 @@ labels, citeproc) is shared with Markdown. Redline marks are
 styled span.
 """
 
+import os
 import re
 import subprocess
 from functools import lru_cache
@@ -20,7 +21,9 @@ SUFFIXES = (".tex", ".ltx")
 HEADING = re.compile(r"^\s*\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*[\[{]")
 BEGIN = re.compile(r"\\begin\s*\{([^{}]+)\}")
 END = re.compile(r"\\end\s*\{([^{}]+)\}")
+LABEL_LINE = re.compile(r"\s*(\\label\s*\{[^{}]*\}\s*)+$")
 LISTS = {"itemize", "enumerate", "description"}
+FLOATS = {"figure", "table", "wrapfigure", "sidewaysfigure", "sidewaystable"}
 PROSE_ENVS = {"quote", "quotation", "center", "abstract", "flushleft", "flushright", "verse"}
 MATH_ENVS = {"equation", "align", "gather", "multline", "eqnarray", "displaymath", "math", "split", "alignat", "flalign"}
 DISPLAY = re.compile(r"\s*\\begin\s*\{(?!(?:" + "|".join(MATH_ENVS) + r")\*?\})")
@@ -150,6 +153,13 @@ def scan(text: str) -> list[tuple[int, int, str]]:
             while depth > 0 and i < end:
                 depth += _braces(codes[i])
                 i += 1
+            # The heading's \label, on the lines after it, is part of the heading:
+            # read apart, pandoc gives the heading no identifier.
+            j = i
+            while j < end and (blank(j) or LABEL_LINE.match(codes[j])):
+                j += 1
+                if not blank(j - 1):
+                    i = j
             blocks.append((s, i, "heading"))
             continue
         if not lead and (m := re.match(r"\s*\\begin\s*\{([^{}]+)\}", code)):
@@ -163,7 +173,7 @@ def scan(text: str) -> list[tuple[int, int, str]]:
                     break
             i = j
             base = env.rstrip("*")
-            blocks.append((s, i, "list" if base in LISTS else "div" if base in PROSE_ENVS else "env"))
+            blocks.append((s, i, "list" if base in LISTS else "div" if base in PROSE_ENVS else "float" if base in FLOATS else "env"))
             continue
         if not lead and code.strip().startswith("\\["):
             j = i
@@ -335,6 +345,22 @@ def input_spans(body: str) -> list[tuple[int, int, str]]:
 def inputs(body: str) -> list[str]:
     """Names \\input or \\include'd in a block, in order."""
     return [name for _, _, name in input_spans(body)]
+
+
+def graphics_paths(root: Path, files: list[str]) -> list[tuple[str, str]]:
+    """(a root document's directory, a directory its \\graphicspath names),
+    both from the repository root, for every root document among `files`."""
+    out = []
+    for rel in files:
+        p = root / rel
+        if not is_tex(rel) or not p.is_file():
+            continue
+        pre = "\n".join(code_part(x) for x in preamble(p.read_text(errors="replace")).splitlines())
+        doc = Path(rel).parent
+        for m in re.finditer(r"\\graphicspath\s*\{((?:\s*\{[^{}]*\})+)\s*\}", pre):
+            for d in re.findall(r"\{([^{}]*)\}", m.group(1)):
+                out.append((doc.as_posix(), os.path.normpath((doc / d.strip()).as_posix())))
+    return out
 
 
 def is_root(text: str) -> bool:

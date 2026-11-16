@@ -31,6 +31,17 @@ command you remember is refused. Each entry is a change that can break a habit,
 a script or a note in a project's own instructions, with what to do instead.
 Rounds already returned are never affected: their record is frozen.
 
+- **0.11.0.** For rounds returned from 0.11 on, some changes are cut finer.
+  Nothing in the record format or `--json` shapes changed, and earlier
+  versions read these records.
+  - An edit to a LaTeX preamble or a YAML header is one `text` change for
+    each run of changed lines, where it was one `block` change holding the
+    whole preamble or header. Do not expect one id for "the front matter".
+  - An edit to the caption of a LaTeX `figure` or `table` is `text` changes
+    on the words, where it was one `block` change for the float.
+  - In LaTeX a heading and the `\label` on the lines after it are one block,
+    so line numbers and block boundaries around such headings differ from
+    what 0.10 reported for the same file.
 - **0.10.0.** For rounds returned from 0.10 on, a passage the reviewer moved
   is one change of type `move`, where it used to be a `block` removal and a
   `block` insertion with separate ids.
@@ -236,8 +247,9 @@ the side's initials, so the record says which agent did what.
 - **LaTeX sources.** Edit `.tex` files as LaTeX: keep commands, braces and
   `%` comments intact, and write `--wording` answers as LaTeX source. Quotes
   for `scrivmark comment --quote` are source text (`\USD{5,000}`, not
-  `US$5,000`). The preamble is not shown in the viewer; anything changed there
-  appears only in `scrivmark changes`.
+  `US$5,000`). The preamble is not shown in the viewer's running text; a
+  change there is listed above the text and in `scrivmark changes`, the
+  changed lines only.
 - `scrivmark return` hands the round back. It refuses while drafts remain.
   Run `scrivmark return --dry-run --json` first and tell the reviewer what it
   reports (drafts left, untracked files, comments that lost their place, how

@@ -49,6 +49,18 @@ def resolve(root: Path, rel: str) -> Path | None:
     return None
 
 
+def locate(root: Path, rel: str, paths: list[tuple[str, str]]) -> str:
+    """`rel` as it stands if it names a graphic, else under the first
+    \\graphicspath directory (latex.graphics_paths) that holds it."""
+    if resolve(root, rel):
+        return rel
+    for doc, d in paths:
+        rest = rel if doc == "." else rel[len(doc) + 1 :] if rel.startswith(doc + "/") else None
+        if rest is not None and resolve(root, f"{d}/{rest}"):
+            return f"{d}/{rest}"
+    return rel
+
+
 def png(root: Path, rel: str) -> Path | None:
     src = resolve(root, rel)
     if src is None:

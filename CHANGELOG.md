@@ -10,6 +10,34 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.11.0 (16 November 2026)
+
+LaTeX, after a practice round on a public 10,700-word paper
+([docs/audits/2026-11-16-latex-round.md](docs/audits/2026-11-16-latex-round.md)).
+
+- **A heading with its `\label` on the next line is one block.** It was read
+  as a heading and a separate paragraph, which pandoc reads differently from
+  the two together, so scrivmark fused the heading with the paragraphs on both
+  sides of it. A paragraph moved to just before such a heading then took the
+  heading with it, and a reworded heading was hidden inside a larger change.
+  The practice paper had 14 of these; it now has none, and opens six times
+  faster.
+- **Figures are found under `\graphicspath`.** They showed as "Figure could
+  not be shown".
+- **An edit to a figure or table caption is a word-level change**, shown in
+  place, where the whole figure used to be shown twice. A change the viewer
+  cannot mark inside a float (the width of a graphic, a new table row) is
+  still shown as the whole float, old and new.
+- **An edit to the LaTeX preamble or a YAML header is the lines that
+  changed.** One edited comment in a 48-line preamble used to be one change
+  showing all 48 lines struck out and all 48 added.
+- Checked on 160 random LaTeX rounds through the real return, reject and undo
+  path and 1,850 random pairs in memory, built from the blocks of three
+  published papers: rejecting everything restored the authors' text, and
+  undoing restored the reviewer's. Line breaks inside a paragraph are not
+  changes, so a paragraph the reviewer re-wrapped stays re-wrapped.
+- The record format is unchanged.
+
 ## 0.10.0 (16 November 2026)
 
 - **A moved passage is one change.** A paragraph the reviewer moved was
