@@ -15,7 +15,9 @@ every push.
    that the changelog has an entry.
 2. Add `## X.Y.Z (date)` to `CHANGELOG.md`, written for a user rather than a
    developer.
-3. Commit, push, and wait for CI.
+3. Commit, push, and wait for CI. It runs the viewer in Chromium
+   (`tests/test_browser.py`); to run those tests locally, install the browser
+   once with `uv run playwright install chromium`, or they skip.
 4. `git tag -a vX.Y.Z -m "scrivmark X.Y.Z" && git push origin vX.Y.Z`
 5. `gh release create vX.Y.Z --title "scrivmark X.Y.Z" --notes-file <entry>`,
    with the entry extracted from the changelog.

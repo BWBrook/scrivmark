@@ -24,6 +24,7 @@ jobs:
           git config --global user.name "CI"
           git config --global user.email "ci@example.org"
           uv sync --locked
+          uv run playwright install --with-deps chromium
           uv run pytest -q -p no:warnings
       - name: Wheel carries its resources
         run: |
