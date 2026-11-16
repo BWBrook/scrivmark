@@ -44,11 +44,16 @@ def tokens(text: str, base: int = 0, tex: bool = False) -> list[Token]:
 
 @dataclass
 class Unit:
-    type: str  # text | block
+    type: str  # text | block | move
     old: tuple[int, int]
     new: tuple[int, int]
     old_text: str
     new_text: str
+    # A move is two block units decided as one: `left` is the place the passage
+    # was taken from and `arrived` the place it was put. The unit's own old
+    # range and text are the passage where it was, its new ones where it is.
+    left: "Unit | None" = None
+    arrived: "Unit | None" = None
 
 
 def _key(t: Token) -> str:
@@ -196,6 +201,7 @@ def _rewritten(ops: list[tuple], ot: list[Token], nt: list[Token], by_line: bool
 
 PAIR = 0.3
 REFLOW = 0.6
+MOVED = 0.6
 WORD = re.compile(r"\w+")
 
 
@@ -224,16 +230,19 @@ def _reflow(one: list[str], first: list[str], second: list[str]) -> float:
     return sm.ratio()
 
 
-def _match(okeys: list[str], nkeys: list[str], texty: list[bool], ntexty: list[bool]) -> list[tuple[str, int, int, int, int]]:
+def _match(okeys: list[str], nkeys: list[str], texty: list[bool], ntexty: list[bool],
+           ofixed: list[bool], nfixed: list[bool]) -> list[tuple[str, int, int, int, int]]:
     """Pair the blocks of a changed region by likeness, in order, where a
     positional pairing would set a moved or inserted paragraph against an
-    unrelated neighbour. Steps are ("same" | "pair" | "block", i1, i2, j1, j2);
-    a block step covers what was removed, added, split or joined."""
+    unrelated neighbour. Steps are ("same" | "pair" | "block" | "reflow", i1,
+    i2, j1, j2); a block step covers what was removed or added, a reflow step
+    a block split in two or two joined. A fixed
+    block (one that moved) is paired with nothing."""
     n, m = len(okeys), len(nkeys)
     if n * m > 900:
         return [("block", 0, n, 0, m)]
-    ow = [WORD.findall(k.lower()) if t else [] for k, t in zip(okeys, texty)]
-    nw = [WORD.findall(k.lower()) if t else [] for k, t in zip(nkeys, ntexty)]
+    ow = [WORD.findall(k.lower()) if t and not f else [] for k, t, f in zip(okeys, texty, ofixed)]
+    nw = [WORD.findall(k.lower()) if t and not f else [] for k, t, f in zip(nkeys, ntexty, nfixed)]
     best = [[0.0] * (m + 1) for _ in range(n + 1)]
     how: list[list[str]] = [[""] * (m + 1) for _ in range(n + 1)]
     for a in range(n + 1):
@@ -246,7 +255,9 @@ def _match(okeys: list[str], nkeys: list[str], texty: list[bool], ntexty: list[b
             if b:
                 options.append((best[a][b - 1], "ins"))
             if a and b:
-                if okeys[a - 1] == nkeys[b - 1]:
+                if ofixed[a - 1] or nfixed[b - 1]:
+                    pass
+                elif okeys[a - 1] == nkeys[b - 1]:
                     options.append((best[a - 1][b - 1] + 1.0, "same"))
                 elif r := _ratio(ow[a - 1], nw[b - 1]):
                     options.append((best[a - 1][b - 1] + r, "pair"))
@@ -259,7 +270,7 @@ def _match(okeys: list[str], nkeys: list[str], texty: list[bool], ntexty: list[b
     a, b = n, m
     while a or b:
         da, db = {"del": (1, 0), "ins": (0, 1), "same": (1, 1), "pair": (1, 1), "split": (1, 2), "join": (2, 1)}[how[a][b]]
-        kind = how[a][b] if how[a][b] in ("same", "pair") else "block"
+        kind = {"same": "same", "pair": "pair", "split": "reflow", "join": "reflow"}.get(how[a][b], "block")
         steps.append((kind, a - da, a, b - db, b))
         a, b = a - da, b - db
     steps.reverse()
@@ -279,18 +290,77 @@ class Op:
     old: list[Segment]
     new: list[Segment]
     units: list[Unit]
+    move: int | None = None  # the same number on the two block ops of a move
+    reflow: bool = False  # a block split in two, or two joined
 
 
 def align(old: str, new: str, tex: bool = False) -> list[Op]:
     """Align the blocks of two texts. Paired prose blocks carry word-level
-    units; everything else that differs is one block unit."""
+    units; everything else that differs is one block unit, except that a
+    passage taken from one place and put in another is one move unit, carried
+    by the op where it arrived."""
     os_, ns = guarded_segments(old, tex), guarded_segments(new, tex)
+    ops = _align(old, new, os_, ns, tex, {}, {})
+    was, now = _moves(old, new, os_, ns, ops)
+    if not was:
+        return ops
+    moved = _align(old, new, os_, ns, tex, was, now)
+    for g in set(was.values()):
+        ends = [op for op in moved if op.move == g]
+        if len(ends) != 2 or bool(ends[0].old) == bool(ends[1].old):
+            return ops
+        left, arrived = (ends[0], ends[1]) if ends[0].old else (ends[1], ends[0])
+        a, b = left.units[0], arrived.units[0]
+        arrived.units = [Unit("move", a.old, b.new, a.old_text, b.new_text, a, b)]
+        left.units = []
+    return moved
+
+
+def _moves(old: str, new: str, os_: list[Segment], ns: list[Segment], ops: list[Op]) -> tuple[dict[int, int], dict[int, int]]:
+    """Blocks removed in one place and added in another, the same or nearly
+    so: old and new block indices, each mapped to its move's number. Blocks
+    that moved together, side by side, are one move."""
+    at_o = {id(s): i for i, s in enumerate(os_)}
+    at_n = {id(s): j for j, s in enumerate(ns)}
+    loose = [(k, op) for k, op in enumerate(ops) if op.tag == "block" and not op.reflow]
+    gone = [(at_o[id(s)], k) for k, op in loose for s in op.old]
+    come = [(at_n[id(s)], k) for k, op in loose for s in op.new]
+    words = lambda text, seg: WORD.findall(text[seg.b0 : seg.b1].lower())  # noqa: E731
+    found = []
+    for i, ko in gone:
+        o = old[os_[i].b0 : os_[i].b1]
+        if not WORD.search(o):
+            continue
+        for j, kn in come:
+            if ko == kn and len(ops[ko].old) == 1 and len(ops[ko].new) == 1:
+                continue
+            n = new[ns[j].b0 : ns[j].b1]
+            if " ".join(o.split()) == " ".join(n.split()):
+                found.append((2.0, i, j))
+            elif os_[i].kind in TEXT_KINDS and ns[j].kind in TEXT_KINDS and len(words(old, os_[i])) >= 6:
+                r = _ratio(words(old, os_[i]), words(new, ns[j]))
+                if r >= MOVED:
+                    found.append((r, i, j))
+    to: dict[int, int] = {}
+    for _, i, j in sorted(found, key=lambda f: (-f[0], f[1], f[2])):
+        if i not in to and j not in to.values():
+            to[i] = j
+    was: dict[int, int] = {}
+    now: dict[int, int] = {}
+    for i in sorted(to):
+        g = was[i - 1] if to.get(i - 1) == to[i] - 1 else i
+        was[i], now[to[i]] = g, g
+    return was, now
+
+
+def _align(old: str, new: str, os_: list[Segment], ns: list[Segment], tex: bool,
+           was: dict[int, int], now: dict[int, int]) -> list[Op]:
     okeys = [old[s.b0 : s.b1] for s in os_]
     nkeys = [new[s.b0 : s.b1] for s in ns]
     sm = SequenceMatcher(None, okeys, nkeys, autojunk=False)
     ops: list[Op] = []
 
-    def block(i1: int, i2: int, j1: int, j2: int) -> None:
+    def block(i1: int, i2: int, j1: int, j2: int, move: int | None = None, reflow: bool = False) -> None:
         o = (os_[i1].a, os_[i2 - 1].z) if i2 > i1 else (_point(os_, i1, len(old)),) * 2
         n = (ns[j1].a, ns[j2 - 1].z) if j2 > j1 else (_point(ns, j1, len(new)),) * 2
         # The blank line before a block belongs to the block before it. Where
@@ -302,14 +372,36 @@ def align(old: str, new: str, tex: bool = False) -> list[Op]:
             if old[po : o[0]] != new[pn : n[0]]:
                 o, n = (po, o[1]), (pn, n[1])
         unit = Unit("block", o, n, old[o[0] : o[1]], new[n[0] : n[1]])
-        ops.append(Op("block", os_[i1:i2], ns[j1:j2], [unit]))
+        ops.append(Op("block", os_[i1:i2], ns[j1:j2], [unit], move, reflow))
+
+    def blocks(i1: int, i2: int, j1: int, j2: int) -> None:
+        """One block, or with moved blocks among them each move on its own."""
+        while i1 < i2 or j1 < j2:
+            if i1 < i2 and i1 in was:
+                e = i1 + 1
+                while e < i2 and was.get(e) == was[i1]:
+                    e += 1
+                block(i1, e, j1, j1, was[i1])
+                i1 = e
+            elif j1 < j2 and j1 in now:
+                e = j1 + 1
+                while e < j2 and now.get(e) == now[j1]:
+                    e += 1
+                block(i1, i1, j1, e, now[j1])
+                j1 = e
+            else:
+                ie = next((k for k in range(i1, i2) if k in was), i2)
+                je = next((k for k in range(j1, j2) if k in now), j2)
+                block(i1, ie, j1, je)
+                i1, j1 = ie, je
 
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             ops.append(Op("equal", os_[i1:i2], ns[j1:j2], []))
         elif tag == "replace":
             steps = _match(okeys[i1:i2], nkeys[j1:j2], [s.kind in TEXT_KINDS for s in os_[i1:i2]],
-                           [s.kind in TEXT_KINDS for s in ns[j1:j2]])
+                           [s.kind in TEXT_KINDS for s in ns[j1:j2]],
+                           [i in was for i in range(i1, i2)], [j in now for j in range(j1, j2)])
             for kind, a1, a2, b1, b2 in steps:
                 oi, nj = i1 + a1, j1 + b1
                 if kind == "same":
@@ -321,10 +413,12 @@ def align(old: str, new: str, tex: bool = False) -> list[Op]:
                         block(oi, oi + 1, nj, nj + 1)
                     else:
                         ops.append(Op("pair", [oseg], [nseg], units))
+                elif kind == "reflow":
+                    block(oi, i1 + a2, nj, j1 + b2, reflow=True)
                 else:
-                    block(oi, i1 + a2, nj, j1 + b2)
+                    blocks(oi, i1 + a2, nj, j1 + b2)
         else:
-            block(i1, i2, j1, j2)
+            blocks(i1, i2, j1, j2)
     return ops
 
 

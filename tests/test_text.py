@@ -118,9 +118,8 @@ def test_a_moved_paragraph_is_not_set_against_its_neighbour():
     paragraph was word-diffed against an unrelated one: seven nonsense changes."""
     a, b, c, d = PARAS
     units = diff_units(doc(a, b, c, d), doc(a, c, b.replace("do not capture", "ignore"), d))
-    # which of the two counts as the one that moved is arbitrary; either way it is taken out whole and put in whole
-    blocks = [(u.old_text.strip(), u.new_text.strip()) for u in units if u.type == "block"]
-    assert len(blocks) == 2 and all("" in pair for pair in blocks)
+    # which of the two counts as the one that moved is arbitrary; since 0.10.0 it is one move
+    assert sorted(u.type for u in units) in (["move"], ["move", "text"])
     assert [(u.old_text, u.new_text) for u in units if u.type == "text"] in ([], [("do not capture", "ignore")])
 
 

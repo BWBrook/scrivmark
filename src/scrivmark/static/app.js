@@ -768,7 +768,10 @@ function openDecision(target) {
   pop.replaceChildren(...cs.map(c => {
     const reason = deciding ? reasonInput() : null;
     return el("div", {},
-      el("div", { class: "diff" }, el("del", {}, c.base || "∅"), " → ", el("ins", {}, c.reviewer || "∅")),
+      c.type === "move" ? el("div", { class: "muted small" },
+        `Moved from line ${c.from_line} to line ${c.line}${sameText(c) ? "" : ", and edited"}. Rejecting puts it back where it was.`) : null,
+      sameText(c) ? el("div", { class: "diff" }, short(c.reviewer, 160))
+        : el("div", { class: "diff" }, el("del", {}, c.base || "∅"), " → ", el("ins", {}, c.reviewer || "∅")),
       ...contestLines(c),
       deciding ? reason : el("div", { class: "muted small" }, "Contested: the authors decide this again."),
       deciding ? el("div", { class: "acts" }, ...decisionButtons(c, reason)) : null);
@@ -777,6 +780,8 @@ function openDecision(target) {
   place(pop, target.getBoundingClientRect());
   (deciding ? $("button", pop) : pop).focus();
 }
+
+const sameText = c => c.type === "move" && c.base.split(/\s+/).join(" ").trim() === c.reviewer.split(/\s+/).join(" ").trim();
 
 function closePop() {
   if (pop.hidden) return;
@@ -1038,7 +1043,8 @@ function items() {
       out.push({ kind: "change", id: c.id, done: c.state !== "pending" && !(st.mode === "signoff" && decided), at: c.line ? `${c.file}:${c.line}` : c.file,
         new: !!c.new, change: c, because: decided || c.because ? decisionLine(c) : null,
         contest: st.mode === "signoff" && decided ? true : null, shown: st.rev,
-        label: c.type === "file" ? `${c.file}: ${c.reviewer}` : `${short(c.base, 40) || "(nothing)"} → ${short(c.reviewer, 40) || "(removed)"}`,
+        label: c.type === "file" ? `${c.file}: ${c.reviewer}` : c.type === "move" ? `moved: ${short(c.reviewer, 70)}`
+          : `${short(c.base, 40) || "(nothing)"} → ${short(c.reviewer, 40) || "(removed)"}`,
         node, go: () => node && (node.scrollIntoView({ block: "center", behavior: "smooth" }), node.focus?.({ preventScroll: true })),
         state: c.state === "pending" && c.contested && c.contested.length ? "contested" : c.state });
     }
@@ -1050,6 +1056,7 @@ function items() {
       const blk = m.closest(".scrv-b") || m;
       out.push({ kind: "change", id: `e${i}`, done: false, at: `${blk.dataset.file || ""}${blk.dataset.lines ? ":" + blk.dataset.lines.split("-")[0] : ""}`,
         label: pair ? `${short(m.textContent, 40)} → ${short(next.textContent, 40)}`
+          : m.matches(".scrv-from") ? `moved from here: ${short(m.textContent, 60)}` : m.matches(".scrv-to") ? `moved here: ${short(m.textContent, 60)}`
           : m.matches(".scrv-del, .scrv-old") ? `removed: ${short(m.textContent, 70)}` : `added: ${short(m.textContent, 70)}`,
         node: m, go: () => m.scrollIntoView({ block: "center", behavior: "smooth" }), state: "your edit" });
       if (pair) i++;

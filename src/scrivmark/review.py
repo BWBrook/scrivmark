@@ -244,8 +244,11 @@ def catalogue(root: Path, ms: config.Manuscript, base: str, returned: str) -> li
             for u in diff_units(a, b, latex.is_tex(path)):
                 changes.append(
                     {"type": u.type, "file": path, "old_file": None, "base": u.old_text,
-                     "reviewer": u.new_text, "r_range": list(u.new)}
+                     "reviewer": u.new_text, "r_range": list(u.new), "b_range": list(u.old)}
                 )
+                if u.type == "move":
+                    changes[-1].update({"from": {"r_range": list(u.left.new), "reviewer": u.left.new_text},
+                                        "to": {"b_range": list(u.arrived.old), "base": u.arrived.old_text}})
         else:
             a = gitutil.show_bytes(root, base, old or path)
             b = gitutil.show_bytes(root, returned, path)
@@ -265,25 +268,44 @@ def _r_text(rv: Review, path: str) -> str:
     return gitutil.show(rv.root, rv.rec["round"]["returned"], path) or ""
 
 
+FROM = "<"
+
+
+def _sites(c: dict) -> list[tuple[str, tuple[int, int], int, str, str]]:
+    """The places a change touches, as (key, range in the returned text, start
+    in the base text, the base text there, the reviewer's text there). A move
+    touches two: where the passage now is (key: the change id) and where it
+    was (the id + "<"). Records from before 0.10 have no base positions."""
+    at = c.get("b_range", (0, 0))[0]
+    if c["type"] != "move":
+        return [(c["id"], tuple(c["r_range"]), at, c["base"], c["reviewer"])]
+    return [(c["id"], tuple(c["r_range"]), c["to"]["b_range"][0], c["to"]["base"], c["reviewer"]),
+            (c["id"] + FROM, tuple(c["from"]["r_range"]), at, c["base"], c["from"]["reviewer"])]
+
+
 def expected(rv: Review, path: str) -> tuple[str, dict[str, tuple[int, int]]]:
     """The returned text with every recorded rejection applied: what the file
     would hold if the author had changed nothing else. Also each change's
-    range within it."""
+    range within it (and under the id + "<", where a moved passage was)."""
     r = _r_text(rv, path)
-    units = sorted((c for c in rv.rec["changes"] if c["file"] == path and c["type"] != "file"),
-                   key=lambda c: tuple(c["r_range"]))
+    # two changes at one point of the returned text keep their base order
+    sites = sorted(((rng, at, k, key, base, c["decision"] == "rejected")
+                    for k, c in enumerate(rv.rec["changes"]) if c["file"] == path and c["type"] != "file"
+                    for key, rng, at, base, _ in _sites(c)), key=lambda s: s[:3])
     parts, ranges, pos, length = [], {}, 0, 0
-    for c in units:
-        s, e = c["r_range"]
+    for (s, e), _, _, key, base, rejected in sites:
         parts.append(r[pos:s])
         length += s - pos
-        piece = c["base"] if c["decision"] == "rejected" else r[s:e]
+        piece = base if rejected else r[s:e]
         parts.append(piece)
-        ranges[c["id"]] = (length, length + len(piece))
+        ranges[key] = (length, length + len(piece))
         length += len(piece)
         pos = e
     parts.append(r[pos:])
     return "".join(parts), ranges
+
+
+RANK = {"exact": 0, "ambiguous": 1, "shifted": 2, "gone": 3}
 
 
 def target(rv: Review, change: dict) -> dict:
@@ -294,16 +316,26 @@ def target(rv: Review, change: dict) -> dict:
     ambiguous  the change is intact but its passage is repeated, so which
                copy is the original cannot be established;
     gone       the author has edited or deleted the change itself.
-    """
+
+    A move is judged at both its places and takes the worse state; `range` is
+    where the passage now is and `from` where it was."""
     cur = rv.text(change["file"])
     if cur is None:
         return {"state": "gone"}
     exp, ranges = expected(rv, change["file"])
-    es, ee = ranges[change["id"]]
+    pr = None if cur == exp else projection(exp, cur)
+    found = [_site_target(exp, cur, pr, ranges[key]) for key, *_ in _sites(change)]
+    state = max((f["state"] for f in found), key=RANK.__getitem__)
+    if state == "gone":
+        return {"state": "gone"}
+    return {"state": state, "range": found[0]["range"], **({"from": found[1]["range"]} if len(found) > 1 else {})}
+
+
+def _site_target(exp: str, cur: str, pr, at: tuple[int, int]) -> dict:
+    es, ee = at
     piece = exp[es:ee]
-    if cur == exp:
+    if pr is None:
         return {"state": "exact", "range": (es, ee)}
-    pr = projection(exp, cur)
     r = pr.range(es, ee) if es < ee else (lambda p: None if p is None else (p, p))(pr.point(es))
     if r is None or cur[r[0] : r[1]] != piece:
         return {"state": "gone"}
@@ -355,6 +387,8 @@ def changes(rv: Review) -> list[dict]:
             text = gitutil.show(rv.root, returned, c["file"]) or ""
             s, e = c["r_range"]
             x["line"] = text.count("\n", 0, s) + 1
+            if c["type"] == "move":
+                x["from_line"] = text.count("\n", 0, c["from"]["r_range"][0]) + 1
             x["context"] = _context(text, s, e, None, span=70)["before"]
         out.append(x)
     return out
@@ -416,9 +450,14 @@ def _reject_writes(rv: Review, c: dict) -> dict:
         raise Conflict(f"{c['id']} was not rejected because {why}. Nothing was changed. Edit the passage yourself "
                        f"instead; the change then becomes superseded, and `scrivmark reject {c['id']} --because \"...\"` "
                        "records your reason with it.")
-    cur = rv.text(c["file"])
-    s, e = t["range"]
-    return {c["file"]: cur[:s] + c["base"] + cur[e:]}
+    return {c["file"]: _put(rv.text(c["file"]), t, [s[3] for s in _sites(c)])}
+
+
+def _put(cur: str, t: dict, texts: list[str]) -> str:
+    """The text with each of a change's places (see `target`) replaced."""
+    for (s, e), text in sorted(zip([t["range"], *([t["from"]] if "from" in t else [])], texts), reverse=True):
+        cur = cur[:s] + text + cur[e:]
+    return cur
 
 
 def undo(rv: Review, cid: str, expect: str | None = None) -> dict:
@@ -442,9 +481,7 @@ def _reopen(rv: Review, c: dict, writes: dict) -> None:
         t = target(rv, c)
         if t["state"] != "exact":
             raise Conflict(f"The restored text for {c['id']} has been edited since, so the rejection cannot be reopened safely.")
-        cur = rv.text(c["file"])
-        s, e = t["range"]
-        writes[c["file"]] = cur[:s] + c["reviewer"] + cur[e:]
+        writes[c["file"]] = _put(rv.text(c["file"]), t, [s[4] for s in _sites(c)])
     undecide(c)
 
 

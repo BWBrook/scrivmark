@@ -506,6 +506,10 @@ def changes(undecided: Annotated[bool, typer.Option(help="Only pending changes."
     for c in cs:
         if c["type"] == "file":
             lines.append(f"{c['id']:>4}  {c['state']:<10} {c['reviewer']}")
+        elif c["type"] == "move":
+            where = f" from line {c['from_line']} to line {c['line']}" if "line" in c else ""
+            edited = "" if " ".join(c["base"].split()) == " ".join(c["reviewer"].split()) else " and edited"
+            lines.append(f"{c['id']:>4}  {c['state']:<10} {c['file']}: moved{where}{edited}: {_short(c['reviewer'])!r}")
         else:
             lines.append(f"{c['id']:>4}  {c['state']:<10} {c['file']}: {_short(c['base'])!r} → {_short(c['reviewer'])!r}")
     _emit(cs, as_json, "\n".join(lines) or "No changes.")

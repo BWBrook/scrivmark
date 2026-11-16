@@ -31,6 +31,22 @@ command you remember is refused. Each entry is a change that can break a habit,
 a script or a note in a project's own instructions, with what to do instead.
 Rounds already returned are never affected: their record is frozen.
 
+- **0.10.0.** For rounds returned from 0.10 on, a passage the reviewer moved
+  is one change of type `move`, where it used to be a `block` removal and a
+  `block` insertion with separate ids.
+  - Accept or reject it once. Rejecting puts the passage back where it was
+    (with the authors' wording, if the reviewer also edited it) and takes it
+    out of where it was put. If you grouped the two halves yourself, stop:
+    there is one id now.
+  - In `changes --json` a move has `base` (the passage as it was), `reviewer`
+    (as it is now), `line` (where it is) and `from_line` (where it was), both
+    in the returned text. A moved passage that was also edited is still one
+    change; to keep the move but not the edit, accept it and edit the passage.
+  - A move is `superseded` once the author edits the passage, and cannot be
+    rejected while the text around the place it left has been edited.
+  - Every text change also carries `b_range`, its place in the base file.
+  - A record with a move cannot be read by scrivmark 0.9 or earlier (`Review
+    record is invalid`): update every machine that works on the round.
 - **0.9.0.** Three changes, all for rounds returned from 0.9 on.
   - A sentence rewritten throughout is one change, where it used to be one per
     fragment, and a paragraph that was moved, added or removed beside edited

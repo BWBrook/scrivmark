@@ -155,6 +155,10 @@ mark.scrv-hl.resolved { background: transparent; border-bottom: 1px dotted var(-
 .scrv-old { color: var(--del); text-decoration: line-through; background: var(--del-bg); border-radius: 4px; padding: 0 6px; opacity: .85; }
 .scrv-old .scrv-oldcite { text-decoration: inherit; }
 .scrv-ins-block { background: var(--ins-bg); box-shadow: -3px 0 0 var(--ins); }
+.scrv-from::before, .scrv-to::before { display: inline-block; width: 100%; font: 600 11px/1.6 system-ui, sans-serif;
+  letter-spacing: .04em; text-transform: uppercase; text-decoration: none; color: var(--muted); }
+.scrv-from::before { content: "Moved from here"; }
+.scrv-to::before { content: "Moved here"; }
 [data-c] { cursor: pointer; }
 .author [data-c]:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cur-item { outline: 2px solid var(--accent) !important; outline-offset: 2px; }

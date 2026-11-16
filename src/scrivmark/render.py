@@ -94,10 +94,10 @@ class _Builder:
     def _src(self, body: str) -> str:
         return latex.code_block(body, self.nonce) if self.tex else body
 
-    def old(self, body: str, change: str | None) -> None:
+    def old(self, body: str, change: str | None, moved: bool = False) -> None:
         if body.strip():
             attrs = _attrs(file=self.rel, c=change, n=self.nonce)
-            self.parts.append(f"{self.fence} {{.scrv-old {attrs}}}\n{self._src(_historical(body, self.tex))}\n\n{self.fence}\n\n")
+            self.parts.append(f"{self.fence} {{.scrv-old{' .scrv-from' if moved else ''} {attrs}}}\n{self._src(_historical(body, self.tex))}\n\n{self.fence}\n\n")
 
     def yaml(self, seg, first_file: bool) -> None:
         if first_file and seg.kind == "yaml":
@@ -217,7 +217,10 @@ def _verify(checks: list[tuple[int, str, str, str, str]], fence: str, nonce: str
     return bad
 
 
-Pending = list[tuple[str, int, int, str, str]]  # (change id, start, end, type, base text)
+# (change id, start, end, type, base text); a move is two: "to", where the
+# passage is, and "from", where it was
+Pending = list[tuple[str, int, int, str, str]]
+INS = "scrv-b scrv-ins-block"
 
 
 def _reviewer_view(b: _Builder, old: str | None, first: bool) -> None:
@@ -231,43 +234,47 @@ def _reviewer_view(b: _Builder, old: str | None, first: bool) -> None:
         elif op.tag == "pair":
             b.inline(op.new[0], [(u, None) for u in op.units])
         else:
-            b.old("\n\n".join(old[s.b0 : s.b1] for s in op.old if s.kind not in HIDDEN), None)
+            moved = op.move is not None
+            b.old("\n\n".join(old[s.b0 : s.b1] for s in op.old if s.kind not in HIDDEN), None, moved)
             for seg in op.new:
-                b.yaml(seg, first) if seg.kind in HIDDEN else b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block", seg.b0, seg.b1)
+                b.yaml(seg, first) if seg.kind in HIDDEN else b.wrap(cur[seg.b0 : seg.b1], INS + " scrv-to" * moved, seg.b0, seg.b1)
 
 
 def _author_view(b: _Builder, pending: Pending, first: bool) -> None:
     """Returned round: show only the frozen catalogue's pending changes, each
     at its projected place in the current text."""
     cur = b.cur
-    blocks = [p for p in pending if p[3] == "block"]
-    shown: set[str] = set()
+    segs = guarded_segments(cur, b.tex)
+    blocks = [p for p in pending if p[3] != "text"]
+    # a change that holds no block of the current text (a removal) is shown
+    # ahead of the first block that starts at or after it
+    bare = [p for p in blocks if not any(p[1] <= s.b0 and s.b1 <= p[2] for s in segs)]
+    shown: set[tuple] = set()
 
     def old_once(p) -> None:
-        if p[0] not in shown:
-            shown.add(p[0])
-            b.old(p[4].strip("\n"), p[0])
+        if p not in shown:
+            shown.add(p)
+            b.old(p[4].strip("\n"), p[0], p[3] == "from")
 
-    for seg in guarded_segments(cur, b.tex):
-        for p in blocks:
-            if p[1] == p[2] and seg.a <= p[1] <= seg.b0:
+    for seg in segs:
+        for p in bare:
+            if p[1] <= seg.b0:
                 old_once(p)
         if seg.kind in HIDDEN:
             b.yaml(seg, first)
             continue
-        hit = next((p for p in blocks if p[1] < p[2] and p[1] <= seg.b0 and seg.b1 <= p[2]), None)
+        hit = next((p for p in blocks if p not in bare and p[1] <= seg.b0 and seg.b1 <= p[2]), None)
         if hit:
             old_once(hit)
-            b.wrap(cur[seg.b0 : seg.b1], "scrv-b scrv-ins-block", seg.b0, seg.b1, hit[0])
+            b.wrap(cur[seg.b0 : seg.b1], INS + " scrv-to" * (hit[3] == "to"), seg.b0, seg.b1, hit[0])
             continue
         inside = [p for p in pending if p[3] == "text" and seg.b0 <= p[1] and p[2] <= seg.b1]
         if not inside:
             b.wrap(cur[seg.b0 : seg.b1], "scrv-b", seg.b0, seg.b1)
             continue
         b.inline(seg, [(Unit("text", (0, 0), (s, e), base, cur[s:e]), cid) for cid, s, e, _, base in inside])
-    for p in blocks:
-        if p[1] == p[2]:
-            old_once(p)
+    for p in bare:
+        old_once(p)
 
 
 def manuscript_markdown(root: Path, ms: Manuscript, nonce: str, base: str | None = None,

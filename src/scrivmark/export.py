@@ -68,6 +68,9 @@ def _change_row(rv: Review, c: dict, live: bool) -> str:
         where = f"{where}:{n}" if n else where
         old, new = _short(c["base"], CELL), _short(c["reviewer"], CELL)
         what = ((f"~~{esc(old)}~~" if old else "(inserted)") + " → " + (esc(new) if new else "(deleted)"))
+        if c["type"] == "move":
+            was = _line(text, c["from"]["r_range"][0])
+            what = f"moved from line {was}: " + (esc(new) if " ".join(c["base"].split()) == " ".join(c["reviewer"].split()) else what)
     if c["decision"]:
         state = f"{c['decision']} by {_who(c)} on {_day(c['at'])}"
         if c.get("because"):

@@ -135,10 +135,16 @@ class Viewer:
         if rv and rv.status in ("returned", "responded"):
             pending = {}
             for c in rv.rec["changes"]:
-                if c["type"] != "file" and review.change_status(rv, c) == "pending":
-                    loc = review.locate(rv, c)
-                    if loc:
-                        pending.setdefault(c["file"], []).append((c["id"], loc[0], loc[1], c["type"], c["base"]))
+                if c["type"] == "file" or c["decision"]:
+                    continue
+                t = review.target(rv, c)
+                if t["state"] == "gone":
+                    continue
+                here = pending.setdefault(c["file"], [])
+                if c["type"] == "move":
+                    here += [(c["id"], *t["range"], "to", c["to"]["base"]), (c["id"], *t["from"], "from", c["base"])]
+                else:
+                    here.append((c["id"], *t["range"], c["type"], c["base"]))
         try:
             html, warnings = render.render(self.root, ms, base, pending)
         except RuntimeError as e:

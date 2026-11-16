@@ -1,6 +1,6 @@
 # scrivmark design
 
-Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.9).
+Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.10).
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
 cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
@@ -9,7 +9,7 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
-## Implementation status (16 November 2026, version 0.9)
+## Implementation status (16 November 2026, version 0.10)
 
 Built: the round lifecycle over plain git, with pull requests through `gh`;
 the frozen change catalogue, decisions and undo; anchoring, with orphaned
@@ -121,9 +121,18 @@ and `R` into a list of **change units** in the record, each with a stable id
   between them, is one unit (`textdiff._rewritten`), as are edits separated
   only by a few unchanged words inside one clause (`textdiff._joins`); a
   rewrite is one decision;
-- `block`: a whole block inserted, deleted, moved (a removal and an
-  insertion), split, joined or restructured (lists, tables, YAML front matter,
-  fenced divs, code chunks);
+- `block`: a whole block inserted, deleted, split, joined or restructured
+  (lists, tables, YAML front matter, fenced divs, code chunks);
+- `move`: a block, or a run of blocks side by side, taken from one place and
+  put in another, the same or nearly so (`textdiff._moves`: equal apart from
+  white space, or prose of six words or more whose words in order are at least
+  0.6 alike). It has two places in `R`, where the passage is (`r_range`) and
+  where it was (`from.r_range`), and one decision: rejecting it restores both.
+  It is found after the first alignment, among blocks that alignment left
+  removed or added, and the alignment is then run again with those blocks set
+  apart, so a move beside other removals or additions is still its own
+  change. Two changes that sit at one point of `R` (two passages moved away
+  from the same spot) are ordered by their place in `B` (`b_range`);
 - `file`: a file added, deleted, renamed or binary-replaced (figures, the
   bibliography, anything outside prose).
 

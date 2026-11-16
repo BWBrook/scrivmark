@@ -204,3 +204,24 @@ def test_the_bar_and_help_fit_a_narrow_pane(repo, view):
     button.scroll_into_view_if_needed()
     button.click()
     expect(page.locator("#helpbox")).to_be_hidden()
+
+
+def test_a_moved_paragraph_is_one_stop_and_rejecting_it_puts_it_back(repo, view, monkeypatch):
+    """Up to 0.9.0 a move was a removal and an insertion, each decided alone."""
+    old = (repo / "paper.md").read_text()
+    paras = old.split("\n\n")
+    last = max(i for i, p in enumerate(paras) if p.startswith("Wombats clearly prefer"))
+    paras.insert(2, paras.pop(last))
+    rounds.start(repo)
+    (repo / "paper.md").write_text("\n\n".join(paras))
+    rounds.return_round(repo, push=False)
+    monkeypatch.setenv("SCRIVMARK_AS", "Sam Student")
+    page = view()
+    expect(page.locator("#counts")).to_contain_text("1 change to decide")
+    expect(page.locator('#doc .scrv-to[data-c="c1"]')).to_have_count(1)
+    assert page.evaluate("queue().length") == 1
+    page.locator('#doc .scrv-from[data-c="c1"]').click()
+    expect(page.locator("#pop")).to_contain_text("Moved from line")
+    page.locator("#pop").get_by_role("button", name="Reject").click()
+    expect(page.locator("#counts")).to_contain_text("0 changes to decide")
+    assert (repo / "paper.md").read_text() == old

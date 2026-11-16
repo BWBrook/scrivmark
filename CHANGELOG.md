@@ -10,6 +10,29 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.10.0 (16 November 2026)
+
+- **A moved passage is one change.** A paragraph the reviewer moved was
+  recorded as a removal and an insertion, each decided alone, so accepting one
+  and rejecting the other left the paragraph in the text twice or not at all.
+  It is now one change of type `move`: accepting keeps it where the reviewer
+  put it, rejecting puts it back where it was. Paragraphs moved together, side
+  by side, are one move, and so is a paragraph that was moved and lightly
+  edited (rejecting restores the authors' wording too). In the viewer both
+  places are marked, "Moved from here" and "Moved here"; either opens the one
+  decision, and `j`/`k` stop at it once. `scrivmark changes` and the exported
+  review say where it moved from and to.
+- **A paragraph removed from the end of a file is shown in place to the
+  author.** In 0.9.0 it was listed under the text as "not shown in the running
+  text".
+- **Record format.** Text changes carry `b_range`, their place in the base
+  file, and a move carries `from` and `to`. Records written by earlier
+  versions are read as before. A record that holds a move cannot be read by
+  0.9 or earlier, so update every machine that works on a round.
+- Checked on 3,000 random pairs of texts and 160 random rounds: rejecting
+  every change restores the authors' text exactly, and undoing restores the
+  reviewer's.
+
 ## 0.9.0 (16 November 2026)
 
 From a practice round on a real 13,700-word paper with 20 edits of every kind
