@@ -325,21 +325,27 @@ def _moves(old: str, new: str, os_: list[Segment], ns: list[Segment], ops: list[
     loose = [(k, op) for k, op in enumerate(ops) if op.tag == "block" and not op.reflow]
     gone = [(at_o[id(s)], k) for k, op in loose for s in op.old]
     come = [(at_n[id(s)], k) for k, op in loose for s in op.new]
+    flat = lambda text, seg: " ".join(text[seg.b0 : seg.b1].split())  # noqa: E731
     words = lambda text, seg: WORD.findall(text[seg.b0 : seg.b1].lower())  # noqa: E731
     found = []
+    same: dict[str, list[tuple[int, int]]] = {}
+    for j, kn in come:
+        same.setdefault(flat(new, ns[j]), []).append((j, kn))
     for i, ko in gone:
-        o = old[os_[i].b0 : os_[i].b1]
-        if not WORD.search(o):
-            continue
-        for j, kn in come:
-            if ko == kn and len(ops[ko].old) == 1 and len(ops[ko].new) == 1:
-                continue
-            n = new[ns[j].b0 : ns[j].b1]
-            if " ".join(o.split()) == " ".join(n.split()):
-                found.append((2.0, i, j))
-            elif os_[i].kind in TEXT_KINDS and ns[j].kind in TEXT_KINDS and len(words(old, os_[i])) >= 6:
-                r = _ratio(words(old, os_[i]), words(new, ns[j]))
-                if r >= MOVED:
+        o = flat(old, os_[i])
+        if WORD.search(o):
+            found += [(2.0, i, j) for j, kn in same.get(o, [])[:30]
+                      if ko != kn or len(ops[ko].old) + len(ops[ko].new) > 2]
+    # Nearly the same: prose only, between two different changes (within one
+    # the order is kept, so nothing moved), and for no more blocks than
+    # _match itself compares.
+    prose_o = [(i, ko, words(old, os_[i])) for i, ko in gone if os_[i].kind in TEXT_KINDS]
+    prose_n = [(j, kn, words(new, ns[j])) for j, kn in come if ns[j].kind in TEXT_KINDS]
+    prose_o = [x for x in prose_o if len(x[2]) >= 6]
+    if len(prose_o) * len(prose_n) <= 900:
+        for i, ko, ow in prose_o:
+            for j, kn, nw in prose_n:
+                if ko != kn and (r := _ratio(ow, nw)) >= MOVED:
                     found.append((r, i, j))
     to: dict[int, int] = {}
     for _, i, j in sorted(found, key=lambda f: (-f[0], f[1], f[2])):

@@ -1,6 +1,8 @@
 """A passage moved from one place to another is one change (0.10.0). Before,
 it was a removal and an insertion decided separately: accepting one and
 rejecting the other left the passage twice or not at all."""
+import time
+
 import pytest
 
 from conftest import git
@@ -55,6 +57,16 @@ def test_a_split_or_joined_paragraph_is_not_a_move():
     a, b = P[1].split(", so ")
     assert kinds(doc(0, 1, 2), doc(0, a + ".", "So " + b, 2)) == ["block"]
     assert kinds(doc(0, 1, 2), doc(0, P[1] + " " + P[2])) == ["block"]
+
+
+def test_a_long_run_of_edited_paragraphs_is_not_searched_for_moves():
+    """Found by Codex's review of this change: a wording edit through 2,048
+    paragraphs took 50 s where it had taken 0.6 s, every removed paragraph
+    being compared with every added one."""
+    old = "\n\n".join(f"Observation {i} describes ecological variation across mountains and valleys." for i in range(300)) + "\n"
+    start = time.perf_counter()
+    assert kinds(old, old.replace("ecological variation", "seasonal patterns")) == ["block"]
+    assert time.perf_counter() - start < 5
 
 
 def returned(repo, monkeypatch, old, new):

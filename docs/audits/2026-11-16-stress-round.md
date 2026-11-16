@@ -65,3 +65,28 @@ the reviewer's text.
 - A split paragraph with an edit inside shows as a whole paragraph replaced.
 - No LaTeX manuscript of this length was on the machine, so the LaTeX path was
   not stressed.
+
+## Follow-up the same day: a move as one change (0.10.0)
+
+Claude (Fable 5.2) made a moved passage one change with two places. Checks:
+
+- 3,000 random pairs of texts in memory (731 moves among 8,684 changes) and
+  160 random rounds through the real return, reject and undo path: rejecting
+  everything gave the base text exactly, undoing gave the reviewer's.
+- 1,100 further random pairs moving, duplicating, deleting and editing lists,
+  tables, code blocks, headings, footnote definitions, fenced divs, display
+  equations and repeated identical paragraphs, with YAML front matter, without
+  a final newline, and in LaTeX: all exact.
+- In the viewer, in a browser pane 800 pixels wide: both places marked, one
+  decision box from either, reject and undo.
+- An independent read-only review by Codex (`gpt-6.1-sol`, high effort, via
+  `codex-delegate`). It confirmed no text-corruption defect and found one
+  regression, fixed with a test: the search for moves compared every removed
+  block with every added one, so a wording edit through 2,048 paragraphs took
+  50 s where 0.9.0 took 0.6 s. Exact matches are now looked up, and near
+  matches are sought only between different changes and for no more blocks
+  than the alignment itself compares.
+
+Left as it is: a file that mixes CRLF paragraph breaks with LF line ends
+inside blocks can fail to restore exactly (1 of 150 random pairs; 0.9.0 fails
+on such files too). A moved passage that was also edited is decided whole.
