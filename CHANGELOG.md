@@ -10,6 +10,43 @@ scrivmark skill --install
 then restart any running viewer. `scrivmark doctor` says when a newer release
 is out, and `scrivmark --version` shows which one you have.
 
+## 0.9.0 (16 November 2026)
+
+From a practice round on a real 13,700-word paper with 20 edits of every kind
+(rewrites, a moved paragraph, a split and a joined one, a deleted section,
+table, heading, caption and citation edits), 12 comments and 6 agent drafts.
+What the round found is in `docs/audits/2026-11-16-stress-round.md`.
+
+- **Rejecting a removed last paragraph puts it back as a paragraph.** If the
+  reviewer deleted the final paragraph of a file and the author rejected that,
+  the paragraph came back joined to the one above it, because the blank line
+  between them was recorded in neither version of the change. The same hole
+  left a stray blank line when an appended paragraph was rejected. Both are
+  fixed for rounds returned from now on. If you rejected a deletion at the
+  end of a file in an earlier round, check that paragraph break.
+- **A rewritten sentence is one change, however much of it survives.** One
+  rewritten paragraph in that round was recorded as twelve changes, each a
+  fragment. A sentence with two or more edits that change at least four words,
+  and at least as many as they leave standing between them, is now one change.
+  The round's 48 changes became 28. Small separate corrections stay separate.
+- **A moved or added paragraph is no longer compared with its neighbour.**
+  Paragraphs in an edited stretch were paired by position, so moving one set
+  it word by word against an unrelated paragraph: seven meaningless changes in
+  that round. They are now paired by likeness. A moved paragraph is one
+  removal and one insertion, and the edits beside it stay small.
+- **Repeated quotes are easier for agents.** When a quote occurs more than
+  once, the refusal names the lines, and `--lines N` with `--quote` picks the
+  occurrence there. Papers repeat sentences between abstract and results.
+- **The viewer is tested in a real browser.** Eight tests drive it in Chromium
+  on every push, covering both front-end faults fixed in 0.8.0.
+
+Checked on that paper: accepting all 28 changes gives the reviewer's text and
+rejecting all 28 gives the authors' original, byte for byte; a first render
+takes 1.5 seconds and later ones 0.05. Checked on 120 further rounds of random
+edits, moves, splits, joins, insertions and deletions drawn from its
+paragraphs (355 changes): rejecting every change in random order restored the
+original exactly each time, and undoing them restored the reviewer's text.
+
 ## 0.8.0 (14 November 2026)
 
 From a full practice round run by a new maintainer (Claude Fable 5.2), and an

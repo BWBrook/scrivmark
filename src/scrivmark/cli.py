@@ -621,6 +621,8 @@ def _anchor(rv, file: str, quote: str | None, prefix: str, suffix: str, lines: s
         first, last = int(a), int(b or a)
         s = sum(len(x) for x in ls[: first - 1])
         e = sum(len(x) for x in ls[:last]) - (1 if ls[last - 1].endswith("\n") else 0)
+        if quote:
+            return review.anchor_quote(rv, file, quote, prefix, suffix, within=(s, e))
         return review.anchor_at(rv, file, s, e)
     if not quote:
         raise ScrivError("Give --quote TEXT or --lines A-B to say where the comment goes.")
@@ -633,7 +635,7 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
             quote: Annotated[Optional[str], typer.Option(help="Exact source text the comment is about.")] = None,
             prefix: Annotated[str, typer.Option(help="Text just before the quote, to pick one occurrence.")] = "",
             suffix: Annotated[str, typer.Option(help="Text just after the quote.")] = "",
-            lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14.")] = None,
+            lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14; with --quote, look for the quote only in those lines.")] = None,
             draft: Annotated[bool, typer.Option(help="A draft for the reviewer to keep or drop (agents).")] = False,
             wording: Annotated[Optional[str], typer.Option(help="With --draft: replacement text to apply if kept.")] = None,
             by: Annotated[Optional[str], typer.Option(help="With --draft: the agent and model drafting, as 'Agent (model)'. "
@@ -688,7 +690,7 @@ def comment(file: Annotated[Optional[str], typer.Argument()] = None,
         if errors:
             first = errors[0]
             raise ScrivError(f"Item {first['item']}" + (f" ({first['file']})" if first.get("file") else "")
-                             + f": {first['error']}. Nothing was added." + (f" ({len(errors)} items have problems; "
+                             + f": {first['error'].rstrip('.')}. Nothing was added." + (f" ({len(errors)} items have problems; "
                              "--dry-run lists them all.)" if len(errors) > 1 else ""))
         out = review.add_many(rv, items, _who(rv), expect)
         if summary:
@@ -766,7 +768,7 @@ def reattach(thread_id: str, file: str,
              quote: Annotated[Optional[str], typer.Option(help="Exact source text the thread is now about.")] = None,
              prefix: Annotated[str, typer.Option(help="Text just before the quote, to pick one occurrence.")] = "",
              suffix: Annotated[str, typer.Option(help="Text just after the quote.")] = "",
-             lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14.")] = None,
+             lines: Annotated[Optional[str], typer.Option(help="Anchor to whole source lines, e.g. 12-14; with --quote, look for the quote only in those lines.")] = None,
              expect: Expect = None, as_json: Json = False):
     """Move a thread that lost its place onto a passage."""
     rv = review.active(_root())

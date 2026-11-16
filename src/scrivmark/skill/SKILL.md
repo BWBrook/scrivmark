@@ -31,6 +31,16 @@ command you remember is refused. Each entry is a change that can break a habit,
 a script or a note in a project's own instructions, with what to do instead.
 Rounds already returned are never affected: their record is frozen.
 
+- **0.9.0.** Three changes, all for rounds returned from 0.9 on.
+  - A sentence rewritten throughout is one change, where it used to be one per
+    fragment, and a paragraph that was moved, added or removed beside edited
+    ones is its own whole-paragraph change, no longer word-diffed against a
+    neighbour. Expect fewer changes in `scrivmark changes --json`.
+  - `comment --quote Q --lines A-B` (and `quote` with `lines` in `--from`)
+    now anchors to Q where it occurs within those lines. It used to ignore
+    the quote and anchor to the whole lines; for that, give `--lines` alone.
+  - When a quote occurs more than once, the refusal names the lines, so the
+    quickest fix is to repeat the command with `--lines N`.
 - **0.8.0.** A rewritten clause is now one change, not one per fragment:
   `Wombats clearly prefer the sunniest aspect` → `Occupancy was highest on one
   aspect and lowest on the other` used to be two changes around the surviving
@@ -141,7 +151,8 @@ the side's initials, so the record says which agent did what.
   # drafts.json: [{"file": "paper.md", "quote": "...", "body": "...", "wording": "..."}, ...]
   ```
 
-  (`prefix`, `suffix` and `lines` work as on the command line; JSON Lines and
+  (`prefix`, `suffix` and `lines` work as on the command line, and `lines`
+  with `quote` picks the occurrence on those lines; JSON Lines and
   `--from -` for stdin also work.) Check a batch first with
   `scrivmark comment --from drafts.json --draft --dry-run`: it reports every
   item that would fail, shows each wording in its sentence (`before` and

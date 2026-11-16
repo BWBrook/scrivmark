@@ -130,3 +130,21 @@ def test_lines_out_of_range_are_refused_cleanly(repo, monkeypatch):
     for bad in ("999", "3-1", "x", "0"):
         r = CliRunner().invoke(app, ["comment", "paper.md", "--lines", bad, "--body", "note"])
         assert isinstance(r.exception, ScrivError), (bad, r.exception)
+
+
+def test_lines_pick_one_occurrence_of_a_repeated_quote(repo):
+    """From the stress round of 16 November 2026: a paper repeats sentences
+    between abstract and results, and the refusal did not say where."""
+    text = "Abstract: the interval spans zero.\n\nResults: the interval spans zero.\n"
+    (repo / "paper.md").write_text(text)
+    git(repo, "commit", "-qam", "Repeats")
+    rounds.start(repo)
+    run = CliRunner()
+    r = run.invoke(app, ["comment", "paper.md", "--quote", "interval spans zero", "--body", "x", "--json"])
+    assert isinstance(r.exception, ScrivError) and "on lines 1, 3" in str(r.exception)
+    r = run.invoke(app, ["comment", "paper.md", "--quote", "interval spans zero", "--lines", "3", "--body", "x", "--json"])
+    assert r.exit_code == 0
+    a = review.active(repo).rec["threads"][0]["anchor"]
+    assert a["exact"] == "interval spans zero" and a["prefix"].endswith("Results: the ")
+    r = run.invoke(app, ["comment", "paper.md", "--quote", "interval spans zero", "--lines", "2", "--body", "x", "--json"])
+    assert isinstance(r.exception, ScrivError) and "line 1, 3" in str(r.exception)

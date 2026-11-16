@@ -1,6 +1,6 @@
 # scrivmark design
 
-Status: design locked 3 November 2026; this document tracks what is built (14 November 2026, version 0.8).
+Status: design locked 3 November 2026; this document tracks what is built (16 November 2026, version 0.9).
 
 scrivmark lets a reviewer and an author do the whole tracked-changes-and-comments
 cycle of manuscript review on Markdown, Quarto and LaTeX sources, without Word, HTML
@@ -9,7 +9,7 @@ renders the manuscript readably, with redline and margin threads, beside the
 chat of a Claude Code or Codex session; the agent works on the same files
 through a CLI.
 
-## Implementation status (14 November 2026, version 0.8)
+## Implementation status (16 November 2026, version 0.9)
 
 Built: the round lifecycle over plain git, with pull requests through `gh`;
 the frozen change catalogue, decisions and undo; anchoring, with orphaned
@@ -113,12 +113,17 @@ and `R` into a list of **change units** in the record, each with a stable id
 (`c1`, `c2`, …), its type, its base and reviewer text, and its exact range in
 `R`. Decisions are keyed by id, never by recomputed content. Unit types:
 
-- `text`: a run of word-level changes inside one aligned prose block. Edits
-  separated only by a few unchanged words inside one clause, fewer than the
-  edits on both sides, are one unit, so a rewritten sentence is one decision
-  (`textdiff._joins`);
-- `block`: a whole block inserted, deleted or restructured (lists, tables, YAML
-  front matter, fenced divs, code chunks);
+- `text`: a run of word-level changes inside one aligned prose block. Blocks
+  in an edited stretch are aligned in order by the likeness of their words
+  (`textdiff._match`), never by position, so a moved or added paragraph is not
+  compared with an unrelated neighbour. Within a pair, a sentence with two or
+  more edits that change at least four words, and at least as many as stand
+  between them, is one unit (`textdiff._rewritten`), as are edits separated
+  only by a few unchanged words inside one clause (`textdiff._joins`); a
+  rewrite is one decision;
+- `block`: a whole block inserted, deleted, moved (a removal and an
+  insertion), split, joined or restructured (lists, tables, YAML front matter,
+  fenced divs, code chunks);
 - `file`: a file added, deleted, renamed or binary-replaced (figures, the
   bibliography, anything outside prose).
 

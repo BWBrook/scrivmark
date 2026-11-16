@@ -105,6 +105,7 @@ def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment, tex: bool = F
     nt = tokens(new[nseg.b0 : nseg.b1], nseg.b0, tex)
     sm = SequenceMatcher(None, [_key(t) for t in ot], [_key(t) for t in nt], autojunk=False)
     ops = _slide(sm.get_opcodes(), ot, nt)
+    rewritten = _rewritten(ops, ot, nt, by_line=oseg.kind in ("list", "table"))
     groups: list[list[tuple]] = []
     cur: list[tuple] = []
     weight = 0
@@ -113,7 +114,7 @@ def _token_hunks(old: str, new: str, oseg: Segment, nseg: Segment, tex: bool = F
         if tag != "equal":
             cur.append(op)
             weight += max(_words(ot[i1:i2]), _words(nt[j1:j2]))
-        elif cur and idx < len(ops) - 1 and _joins(ot[i1:i2], weight, ops[idx + 1], ot, nt):
+        elif cur and idx < len(ops) - 1 and (idx in rewritten or _joins(ot[i1:i2], weight, ops[idx + 1], ot, nt)):
             cur.append(op)
         elif cur:
             groups.append(cur)
@@ -161,8 +162,115 @@ def _joins(kept: list[Token], before: int, nxt: tuple, ot: list[Token], nt: list
     return n < min(before, after)
 
 
-def _similar(a: str, b: str) -> bool:
-    return SequenceMatcher(None, a, b, autojunk=False).quick_ratio() > 0.5
+def _ends_sentence(ts: list[Token], by_line: bool) -> bool:
+    for k, t in enumerate(ts):
+        if t.kind == "space" and ("\n\n" in t.text or (by_line and "\n" in t.text)):
+            return True
+        if t.kind == "punct" and t.text in ".?!" and (k + 1 == len(ts) or ts[k + 1].kind == "space"):
+            return True
+    return False
+
+
+def _rewritten(ops: list[tuple], ot: list[Token], nt: list[Token], by_line: bool) -> set[int]:
+    """The unchanged stretches that lie inside a rewritten sentence: one with
+    two or more edits that together change four words or more, and at least as
+    many as they leave standing between them. Such a sentence is one change to
+    decide; two word swaps in a short sentence stay two. In a list or table a
+    line counts as a sentence."""
+    spans: list[list[int]] = [[]]
+    for idx, (tag, i1, i2, _, _) in enumerate(ops):
+        if tag != "equal":
+            spans[-1].append(idx)
+        elif _ends_sentence(ot[i1:i2], by_line):
+            spans.append([])
+    out: set[int] = set()
+    for edits in spans:
+        if len(edits) < 2:
+            continue
+        between = [k for k in range(edits[0], edits[-1]) if ops[k][0] == "equal"]
+        changed = sum(max(_words(ot[ops[k][1] : ops[k][2]]), _words(nt[ops[k][3] : ops[k][4]])) for k in edits)
+        if changed >= max(4, sum(_words(ot[ops[k][1] : ops[k][2]]) for k in between)):
+            out.update(between)
+    return out
+
+
+PAIR = 0.3
+REFLOW = 0.6
+WORD = re.compile(r"\w+")
+
+
+def _ratio(a: list[str], b: list[str]) -> float:
+    """How alike two blocks are, by their words in order: 0 if below PAIR."""
+    if not a or not b:
+        return 0.0
+    sm = SequenceMatcher(None, a, b, autojunk=False)
+    if sm.real_quick_ratio() < PAIR or sm.quick_ratio() < PAIR:
+        return 0.0
+    r = sm.ratio()
+    return r if r >= PAIR else 0.0
+
+
+def _reflow(one: list[str], first: list[str], second: list[str]) -> float:
+    """Whether one block was split into two (or two joined into one): most of
+    each piece's words are found, in order, in the single block."""
+    if not one or not first or not second:
+        return 0.0
+    sm = SequenceMatcher(None, one, first + second, autojunk=False)
+    cut = len(first)
+    in_first = sum(max(0, min(m.b + m.size, cut) - m.b) for m in sm.get_matching_blocks())
+    in_second = sum(max(0, m.b + m.size - max(m.b, cut)) for m in sm.get_matching_blocks())
+    if in_first < REFLOW * len(first) or in_second < REFLOW * len(second):
+        return 0.0
+    return sm.ratio()
+
+
+def _match(okeys: list[str], nkeys: list[str], texty: list[bool], ntexty: list[bool]) -> list[tuple[str, int, int, int, int]]:
+    """Pair the blocks of a changed region by likeness, in order, where a
+    positional pairing would set a moved or inserted paragraph against an
+    unrelated neighbour. Steps are ("same" | "pair" | "block", i1, i2, j1, j2);
+    a block step covers what was removed, added, split or joined."""
+    n, m = len(okeys), len(nkeys)
+    if n * m > 900:
+        return [("block", 0, n, 0, m)]
+    ow = [WORD.findall(k.lower()) if t else [] for k, t in zip(okeys, texty)]
+    nw = [WORD.findall(k.lower()) if t else [] for k, t in zip(nkeys, ntexty)]
+    best = [[0.0] * (m + 1) for _ in range(n + 1)]
+    how: list[list[str]] = [[""] * (m + 1) for _ in range(n + 1)]
+    for a in range(n + 1):
+        for b in range(m + 1):
+            if a == 0 and b == 0:
+                continue
+            options = []
+            if a:
+                options.append((best[a - 1][b], "del"))
+            if b:
+                options.append((best[a][b - 1], "ins"))
+            if a and b:
+                if okeys[a - 1] == nkeys[b - 1]:
+                    options.append((best[a - 1][b - 1] + 1.0, "same"))
+                elif r := _ratio(ow[a - 1], nw[b - 1]):
+                    options.append((best[a - 1][b - 1] + r, "pair"))
+            if a and b >= 2 and (r := _reflow(ow[a - 1], nw[b - 2], nw[b - 1])):
+                options.append((best[a - 1][b - 2] + 2 * r, "split"))
+            if a >= 2 and b and (r := _reflow(nw[b - 1], ow[a - 2], ow[a - 1])):
+                options.append((best[a - 2][b - 1] + 2 * r, "join"))
+            best[a][b], how[a][b] = max(options, key=lambda o: o[0])
+    steps: list[tuple[str, int, int, int, int]] = []
+    a, b = n, m
+    while a or b:
+        da, db = {"del": (1, 0), "ins": (0, 1), "same": (1, 1), "pair": (1, 1), "split": (1, 2), "join": (2, 1)}[how[a][b]]
+        kind = how[a][b] if how[a][b] in ("same", "pair") else "block"
+        steps.append((kind, a - da, a, b - db, b))
+        a, b = a - da, b - db
+    steps.reverse()
+    out: list[tuple[str, int, int, int, int]] = []
+    for st in steps:
+        loose = st[0] == "block" and (st[2] - st[1]) + (st[4] - st[3]) == 1
+        if loose and out and out[-1][0] == "gap":
+            out[-1] = ("gap", out[-1][1], st[2], out[-1][3], st[4])
+        else:
+            out.append(("gap" if loose else st[0], *st[1:]))
+    return [("block" if k == "gap" else k, *rest) for k, *rest in out]
 
 
 @dataclass
@@ -185,23 +293,36 @@ def align(old: str, new: str, tex: bool = False) -> list[Op]:
     def block(i1: int, i2: int, j1: int, j2: int) -> None:
         o = (os_[i1].a, os_[i2 - 1].z) if i2 > i1 else (_point(os_, i1, len(old)),) * 2
         n = (ns[j1].a, ns[j2 - 1].z) if j2 > j1 else (_point(ns, j1, len(new)),) * 2
+        # The blank line before a block belongs to the block before it. Where
+        # that differs between the versions (the file's last paragraph removed,
+        # or one added after it), the change takes it in, or rejecting a
+        # removed last paragraph would put it back joined to the one above.
+        if i1 and j1 and ops and ops[-1].tag != "block":
+            po, pn = os_[i1 - 1].b1, ns[j1 - 1].b1
+            if old[po : o[0]] != new[pn : n[0]]:
+                o, n = (po, o[1]), (pn, n[1])
         unit = Unit("block", o, n, old[o[0] : o[1]], new[n[0] : n[1]])
         ops.append(Op("block", os_[i1:i2], ns[j1:j2], [unit]))
 
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             ops.append(Op("equal", os_[i1:i2], ns[j1:j2], []))
-        elif tag == "replace" and i2 - i1 == j2 - j1:
-            for oi, nj in zip(range(i1, i2), range(j1, j2)):
-                oseg, nseg = os_[oi], ns[nj]
-                if oseg.kind in TEXT_KINDS and nseg.kind in TEXT_KINDS and _similar(okeys[oi], nkeys[nj]):
+        elif tag == "replace":
+            steps = _match(okeys[i1:i2], nkeys[j1:j2], [s.kind in TEXT_KINDS for s in os_[i1:i2]],
+                           [s.kind in TEXT_KINDS for s in ns[j1:j2]])
+            for kind, a1, a2, b1, b2 in steps:
+                oi, nj = i1 + a1, j1 + b1
+                if kind == "same":
+                    ops.append(Op("equal", os_[oi : oi + 1], ns[nj : nj + 1], []))
+                elif kind == "pair":
+                    oseg, nseg = os_[oi], ns[nj]
                     units = _token_hunks(old, new, oseg, nseg, tex)
                     if _structure_differs(okeys[oi], _undo(new, nseg, units), tex):
                         block(oi, oi + 1, nj, nj + 1)
                     else:
                         ops.append(Op("pair", [oseg], [nseg], units))
                 else:
-                    block(oi, oi + 1, nj, nj + 1)
+                    block(oi, i1 + a2, nj, j1 + b2)
         else:
             block(i1, i2, j1, j2)
     return ops

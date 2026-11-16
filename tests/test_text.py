@@ -83,6 +83,56 @@ def test_a_rewrite_around_a_few_surviving_words_is_one_change():
     # separate small corrections stay separate, as do edits either side of a bracket or a full stop
     apart = diff_units("The data was clear and the model was good.\n", "The data were clear and the model is good.\n")
     assert [(u.old_text, u.new_text) for u in apart] == [("was", "were"), ("was", "is")]
-    clause = diff_units("Occupancy was high (0.80) in the north-west burrows.\n",
-                        "Occupancy was highest (0.80; 95% CI 0.6-0.9) in north-western burrows.\n")
-    assert len(clause) == 3
+    clause = diff_units("Occupancy was high (0.80) in the burrows on north-west slopes.\n",
+                        "Occupancy was highest (0.80) in the burrows on north-western slopes.\n")
+    assert len(clause) == 2
+
+
+def test_a_sentence_rewritten_throughout_is_one_change_per_sentence():
+    """From a practice round on a 13,700-word paper: one rewritten paragraph was
+    twelve changes, each a fragment."""
+    old = ("Under the reconstructed covariance, M0's nominal intervals covered an average of 90.8% of accepted "
+           "timings per planet. This is undercoverage of the convolved distribution; it does not isolate the catalogue.\n")
+    new = ("M0's nominal intervals, built from the reconstructed covariance, covered on average 90.8% of each "
+           "planet's accepted timings. The shortfall belongs to the convolved distribution and cannot be assigned to the catalogue.\n")
+    units = diff_units(old, new)
+    assert len(units) == 2
+    assert units[0].old_text.startswith("Under the") and units[0].old_text.endswith("per planet")
+    assert units[1].old_text.startswith("This is undercoverage") and units[1].new_text.endswith("assigned to")
+    # two word swaps in a short sentence are still two decisions
+    assert len(diff_units("The cat often ate food.\n", "The dog often consumed food.\n")) == 2
+
+
+PARAS = ["Planning a transit observation requires a predicted mid-time and a statement of how wrong it may be.",
+         "Formal period uncertainties do not capture transit-timing variations, as several Kepler studies document.",
+         "The design follows the logic of earlier work that scored predictions on the second half of long time series.",
+         "Retrospective validation of old ephemerides against later timings is not new, nor are proper scores."]
+
+
+def doc(*paras):
+    return "\n\n".join(paras) + "\n"
+
+
+def test_a_moved_paragraph_is_not_set_against_its_neighbour():
+    """Blocks in a changed region were paired by position, so a moved
+    paragraph was word-diffed against an unrelated one: seven nonsense changes."""
+    a, b, c, d = PARAS
+    units = diff_units(doc(a, b, c, d), doc(a, c, b.replace("do not capture", "ignore"), d))
+    # which of the two counts as the one that moved is arbitrary; either way it is taken out whole and put in whole
+    blocks = [(u.old_text.strip(), u.new_text.strip()) for u in units if u.type == "block"]
+    assert len(blocks) == 2 and all("" in pair for pair in blocks)
+    assert [(u.old_text, u.new_text) for u in units if u.type == "text"] in ([], [("do not capture", "ignore")])
+
+
+def test_a_new_paragraph_beside_an_edited_one_leaves_the_edit_small():
+    a, b, c, d = PARAS
+    fresh = "Readers who want only the outcome can skip to the discussion."
+    units = diff_units(doc(a, b, c, d), doc(a, b.replace("several", "many"), fresh, c, d))
+    assert [(u.type, u.old_text.strip(), u.new_text.strip()) for u in units] == [("text", "several", "many"), ("block", "", fresh)]
+
+
+def test_a_split_paragraph_and_a_joined_pair_are_each_one_change():
+    a, b, c, d = PARAS
+    two = a + " " + b
+    assert [u.type for u in diff_units(doc(two, c), doc(a, b, c.replace("logic", "example")))] == ["block", "text"]
+    assert [u.type for u in diff_units(doc(a, b, c), doc(two, c.replace("logic", "example")))] == ["block", "text"]

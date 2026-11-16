@@ -553,9 +553,11 @@ def _ws_pattern(text: str) -> str:
     return r"\s+".join(re.escape(part) for part in text.split())
 
 
-def anchor_quote(rv: Review, rel: str, quote: str, prefix: str = "", suffix: str = "") -> dict:
+def anchor_quote(rv: Review, rel: str, quote: str, prefix: str = "", suffix: str = "",
+                 within: tuple[int, int] | None = None) -> dict:
     """Anchor to quoted source text. Whitespace in the quote matches any run of
-    whitespace, so a phrase quoted from rendered prose finds its wrapped source."""
+    whitespace, so a phrase quoted from rendered prose finds its wrapped source.
+    `within` limits the search to that stretch of the file."""
     text = rv.text(rel)
     if text is None:
         raise ScrivError(f"{rel} does not exist")
@@ -565,16 +567,25 @@ def anchor_quote(rv: Review, rel: str, quote: str, prefix: str = "", suffix: str
         _ws_pattern(quote)
     )
     hits = [m.span() for m in pat.finditer(text)]
+    everywhere = hits
+    if within:
+        hits = [h for h in hits if within[0] <= h[0] and h[1] <= within[1]]
     if prefix.strip():
         pre = re.compile(_ws_pattern(prefix) + r"\s*$")
         hits = [h for h in hits if pre.search(text[max(0, h[0] - 4 * len(prefix) - 20) : h[0]])]
     if suffix.strip():
         suf = re.compile(r"^\s*" + _ws_pattern(suffix))
         hits = [h for h in hits if suf.match(text[h[1] :])]
+    line = lambda h: text.count("\n", 0, h[0]) + 1  # noqa: E731
     if not hits:
+        if within and everywhere:
+            raise ScrivError(f"The quoted text is not in those lines of {rel}; it is on line "
+                             + ", ".join(str(line(h)) for h in everywhere[:8]))
         raise ScrivError(f"The quoted text does not occur in {rel}")
     if len(hits) > 1:
-        raise Conflict(f"The quote occurs {len(hits)} times in {rel}; add --prefix or --suffix to choose one.")
+        where = ", ".join(str(line(h)) for h in hits[:8]) + (" and more" if len(hits) > 8 else "")
+        raise Conflict(f"The quote occurs {len(hits)} times in {rel} (on lines {where}); "
+                       "add --lines N, or --prefix or --suffix, to choose one")
     return anchor_at(rv, rel, *hits[0])
 
 
