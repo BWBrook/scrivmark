@@ -149,7 +149,7 @@ its reviewer, and the reverse. If you act for the authors under the
 reviewer's account, `scrivmark open <round> --as "Name"` first.
 
 Name yourself on everything you do: set `SCRIVMARK_AGENT` (say
-`SCRIVMARK_AGENT="Codex (gpt-6.1-sol)"`) or pass `--by`. It is recorded beside
+`SCRIVMARK_AGENT="Codex (gpt-6.2-sol)"`) or pass `--by`. It is recorded beside
 the side's initials, so the record says which agent did what.
 
 ## Helping a reviewer
